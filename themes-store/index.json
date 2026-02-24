@@ -11,7 +11,7 @@
   },
   {
     "name": "Test Server - Passcode",
-    "baseURL": "",
+    "baseURL": "https://yangens.vercel.app/themestore/",
     "themesURL": "https://yangens.vercel.app/themestore/passcode-enswilde.json"
   }
 ]
