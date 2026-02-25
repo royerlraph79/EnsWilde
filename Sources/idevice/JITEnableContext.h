@@ -38,4 +38,6 @@ typedef void (^SyslogErrorHandler)(NSError *error);
 - (BOOL)killProcessWithPID:(int)pid signal:(int)signal error:(NSError **)error;
 - (BOOL)mountDeveloperDiskImageWithProgress:(void (^)(NSString *status))progressHandler error:(NSError **)error;
 - (BOOL)isDeveloperDiskImageMounted;
+- (NSUInteger)getMountedDeviceCount:(NSError**)error __attribute__((swift_error(zero_result)));
+- (NSInteger)mountPersonalDDIWithImagePath:(NSString*)imagePath trustcachePath:(NSString*)trustcachePath manifestPath:(NSString*)manifestPath error:(NSError**)error __attribute__((swift_error(nonzero_result)));
 @end

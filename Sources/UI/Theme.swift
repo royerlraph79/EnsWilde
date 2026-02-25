@@ -10,18 +10,50 @@ extension Color {
         let b = Double(hex & 0xFF) / 255.0
         self.init(.sRGB, red: r, green: g, blue: b, opacity: alpha)
     }
+    
+    /// Initialize Color from a hex string like "#ef9f76" or "ef9f76"
+    init(hex string: String) {
+        let hex = string.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let r, g, b: Double
+        switch hex.count {
+        case 6:
+            r = Double((int >> 16) & 0xFF) / 255.0
+            g = Double((int >> 8) & 0xFF) / 255.0
+            b = Double(int & 0xFF) / 255.0
+        default:
+            // Fallback to default peach color (#ef9f76)
+            r = 0xef / 255.0; g = 0x9f / 255.0; b = 0x76 / 255.0
+        }
+        self.init(.sRGB, red: r, green: g, blue: b, opacity: 1.0)
+    }
+    
+    static func disabled() -> Color {
+        return Color.secondary
+    }
 }
 
-// MARK: - App Theme
+// MARK: - App Theme (Feather-style system colors)
 
 struct AppTheme {
-    static let bg = Color(hex: 0x151515)
-    static let row = Color(hex: 0x212121)
-    static let textSecondary = Color.white.opacity(0.72)
-    static let accent = Color(hex: 0x9FE7FF)
+    static let bg = Color(.systemGroupedBackground)
+    static let row = Color(.secondarySystemGroupedBackground)
+    static let textSecondary = Color.secondary
+    
+    /// Dynamic accent color from user preference
+    static var accent: Color {
+        let hex = UserDefaults.standard.string(forKey: "EnsWilde.userTintColor") ?? "#ef9f76"
+        return Color(hex: hex)
+    }
+    
+    /// System font helper - uses default iOS font
+    static func font(_ style: Font.TextStyle = .body, weight: Font.Weight = .regular) -> Font {
+        return .system(style, weight: weight)
+    }
 }
 
-// MARK: - Gradient Button (Wallet Style)
+// MARK: - Primary Action Button (Feather Style)
 
 struct WalletStyleButton: View {
     let title: String
@@ -29,42 +61,32 @@ struct WalletStyleButton: View {
     var disabled: Bool = false
     let action: () -> Void
 
-    private let grad = LinearGradient(
-        colors: [Color(hex: 0xAEEBFF), Color(hex: 0xE6B2FF), Color(hex: 0xFFE08A)],
-        startPoint: .leading, endPoint: .trailing
-    )
-
     var body: some View {
         Button(action: action) {
-            ZStack {
-                Text(title)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundStyle(Color.black.opacity(0.86))
-                
+            HStack(spacing: 8) {
                 if isLoading {
-                    HStack { Spacer(); ProgressView().tint(.black.opacity(0.75)) }
-                        .padding(.trailing, 18)
+                    ProgressView()
+                        .tint(.white)
                 }
+                Text(title)
+                    .font(.headline.bold())
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
+            .frame(height: 50)
+            .background(AppTheme.accent)
+            .foregroundColor(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(grad)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.35), radius: 18, x: 0, y: 10)
-        )
+        .buttonStyle(.plain)
         .opacity(disabled ? 0.55 : 1.0)
-        .saturation(disabled ? 0.0 : 1.0)
         .disabled(disabled)
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 }
 
-// MARK: - Secondary Button (Outline)
+// MARK: - Secondary Button
 
 struct SecondaryActionButton: View {
     let title: String
@@ -74,72 +96,43 @@ struct SecondaryActionButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.88))
+                .font(.headline.bold())
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 18)
+                .frame(height: 50)
+                .background(Color(.quaternarySystemFill))
+                .foregroundColor(.primary)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.white.opacity(0.18), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 18, x: 0, y: 10)
         .opacity(disabled ? 0.35 : 1.0)
         .disabled(disabled)
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 }
 
-// MARK: - App Title Header
+// MARK: - App Title Header (not used in Feather-style, kept for compatibility)
 
 struct AppTitleHeader: View {
     private let title = "EnsWilde"
     private let subtitle = "itunesstored & bookassetd sbx escape"
-    
-    private let grad = LinearGradient(
-        colors: [Color(hex: 0xAEEBFF), Color(hex: 0xE6B2FF), Color(hex: 0xFFE08A)],
-        startPoint: .leading, endPoint: .trailing
-    )
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.system(size: 40, weight: .heavy, design: .rounded))
-                .overlay(grad)
-                .mask(Text(title).font(.system(size: 40, weight: .heavy, design: .rounded)))
-                .shadow(color: .black.opacity(0.45), radius: 12, x: 0, y: 6)
-
-            Text(subtitle)
-                .font(.system(size: 13, weight: .regular, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.85))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+        EmptyView()
     }
 }
 
-// MARK: - Section Header
+// MARK: - Section Header (Feather uses standard Form sections)
 
 struct AppSectionHeader: View {
     let title: String
     var body: some View {
-        Text(title)
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.white.opacity(0.86))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-            .padding(.bottom, 6)
+        EmptyView()
     }
 }
 
-// MARK: - Card Row
+// MARK: - Card Row (Feather-style Label row)
 
 struct CardRow: View {
     let title: String
@@ -150,27 +143,18 @@ struct CardRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Icon status
             if let ok {
                 Image(systemName: ok ? "checkmark.seal.fill" : "xmark.seal.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(ok ? .green : Color.white.opacity(0.55))
-            } else {
-                Image(systemName: "circle.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.20))
-                    .padding(.horizontal, 4)
+                    .foregroundStyle(ok ? .green : .red)
             }
 
-            // Text
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .foregroundStyle(.white)
-                    .font(.system(size: 17, weight: .medium, design: .rounded))
+                    .foregroundStyle(.primary)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .font(.system(size: 13, weight: .regular, design: .rounded))
+                        .font(.caption)
+                        .foregroundStyle(ok == true ? .green : (ok == false ? .red : .secondary))
                         .lineLimit(2)
                 }
             }
@@ -178,16 +162,7 @@ struct CardRow: View {
             Spacer()
 
             if let trailing { trailing }
-
-            if showChevron {
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .font(.system(size: 14, weight: .semibold))
-            }
         }
-        .padding(18)
-        .background(AppTheme.row)
-        .cornerRadius(16)
     }
 }
 

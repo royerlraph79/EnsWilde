@@ -13,6 +13,7 @@
 #include "jit.h"
 #include "applist.h"
 #include "profiles.h"
+#include "mount.h"
 
 #include "JITEnableContext.h"
 //#import "StikDebug-Swift.h"
@@ -193,31 +194,177 @@ JITEnableContext* sharedJITContext = nil;
 }
 
 - (BOOL)afcPushFile:(NSString *)sourcePath toPath:(NSString *)destPath error:(NSError **)error {
+    NSLog(@"[afcPushFile] Starting file push: %@ -> %@", sourcePath, destPath);
+    
+    // Validate provider
     if (!provider) {
-        NSLog(@"Provider not initialized!");
+        NSLog(@"[afcPushFile] ERROR: Provider not initialized!");
         *error = [self errorWithStr:@"Provider not initialized!" code:-1];
-        return nil;
+        return NO;
     }
+    
+    // Validate source file exists
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:sourcePath]) {
+        NSLog(@"[afcPushFile] ERROR: Source file does not exist: %@", sourcePath);
+        *error = [self errorWithStr:[NSString stringWithFormat:@"Source file does not exist: %@", sourcePath] code:-2];
+        return NO;
+    }
+    
+    // Check source file is readable
+    if (![fileManager isReadableFileAtPath:sourcePath]) {
+        NSLog(@"[afcPushFile] ERROR: Source file is not readable: %@", sourcePath);
+        *error = [self errorWithStr:[NSString stringWithFormat:@"Source file is not readable: %@", sourcePath] code:-3];
+        return NO;
+    }
+    
+    // Load file data before connecting to device
+    NSError *readError = nil;
+    NSData* fileData = [NSData dataWithContentsOfFile:sourcePath options:0 error:&readError];
+    if (!fileData || readError) {
+        NSLog(@"[afcPushFile] ERROR: Failed to read source file: %@", readError.localizedDescription);
+        *error = [self errorWithStr:[NSString stringWithFormat:@"Failed to read source file: %@", readError.localizedDescription] code:-4];
+        return NO;
+    }
+    
+    NSLog(@"[afcPushFile] Source file loaded: %lu bytes", (unsigned long)fileData.length);
+    
+    // Connect to AFC client
     struct AfcClientHandle *client = NULL;
     IdeviceFfiError* err = afc_client_connect(provider, &client);
     if (err) {
-        *error = [self errorWithStr:@"Failed to read pairing file!" code:err->code];
-        return nil;
+        NSLog(@"[afcPushFile] ERROR: Failed to connect AFC client - code:%d, msg:%s", err->code, err->message);
+        *error = [self errorWithStr:[NSString stringWithFormat:@"Failed to connect to device AFC service (code:%d)", err->code] code:err->code];
+        idevice_error_free(err);
+        return NO;
     }
-
+    
+    NSLog(@"[afcPushFile] AFC client connected successfully");
+    
+    // Extract directory path from destination
+    NSString *destDir = [destPath stringByDeletingLastPathComponent];
+    if (destDir && destDir.length > 0 && ![destDir isEqualToString:@"/"]) {
+        NSLog(@"[afcPushFile] Ensuring destination directory exists: %@", destDir);
+        
+        // Try to create directory
+        err = afc_make_directory(client, destDir.fileSystemRepresentation);
+        if (err) {
+            // Directory creation failed - check if it's because it already exists
+            // Error code -17 (EEXIST) means directory already exists, which is OK
+            if (err->code == -17) {
+                NSLog(@"[afcPushFile] Directory already exists: %@", destDir);
+            } else {
+                // Other errors might indicate permission issues or other problems
+                NSLog(@"[afcPushFile] WARNING: Directory creation failed with code:%d, msg:%s", err->code, err->message);
+                // Continue anyway - the file open will fail with a clear error if directory is truly inaccessible
+            }
+            idevice_error_free(err);
+        } else {
+            NSLog(@"[afcPushFile] Directory created successfully: %@", destDir);
+        }
+    }
+    
+    // Open destination file for writing
     struct AfcFileHandle *handle = NULL;
     err = afc_file_open(client, destPath.fileSystemRepresentation, AfcWrOnly, &handle);
     if (err) {
-        *error = [self errorWithStr:@"Failed to open destination file on device!" code:err->code];
+        NSLog(@"[afcPushFile] ERROR: Failed to open destination file - code:%d, msg:%s", err->code, err->message);
+        
+        // Provide detailed error message based on error code
+        // Note: These are common POSIX-style error codes. AFC service typically returns
+        // standard errno values, but the exact codes may vary. Logging the actual error
+        // code helps diagnose any discrepancies.
+        NSString *detailedMsg;
+        switch (err->code) {
+            case -2:  // ENOENT - No such file or directory
+                detailedMsg = [NSString stringWithFormat:@"Destination path does not exist or is invalid: %@", destPath];
+                break;
+            case -13: // EACCES - Permission denied
+                detailedMsg = @"Permission denied. The app does not have access to write to this location.";
+                break;
+            case -28: // ENOSPC - No space left on device
+                detailedMsg = @"Insufficient storage space on device.";
+                break;
+            case -17: // EEXIST - File exists
+                detailedMsg = [NSString stringWithFormat:@"File already exists and cannot be overwritten: %@", destPath];
+                break;
+            default:
+                detailedMsg = [NSString stringWithFormat:@"Failed to open destination file on device (error code:%d): %@", err->code, destPath];
+                break;
+        }
+        
+        *error = [self errorWithStr:detailedMsg code:err->code];
+        idevice_error_free(err);
         afc_client_free(client);
         return NO;
     }
-
-    NSData* fileData = [NSData dataWithContentsOfFile:sourcePath];
-    afc_file_write(handle, fileData.bytes, fileData.length);
-    afc_file_close(handle);
-
+    
+    NSLog(@"[afcPushFile] Destination file opened for writing");
+    
+    // Write file data in chunks to prevent timeout on large files
+    // Error code -60 (ETIMEDOUT) can occur when writing large files in one operation
+    const size_t CHUNK_SIZE = 256 * 1024; // 256KB chunks
+    size_t totalWritten = 0;
+    const uint8_t *dataBytes = (const uint8_t *)fileData.bytes;
+    size_t totalLength = fileData.length;
+    
+    NSLog(@"[afcPushFile] Writing %lu bytes in chunks of %zu bytes", (unsigned long)totalLength, CHUNK_SIZE);
+    
+    while (totalWritten < totalLength) {
+        size_t chunkSize = MIN(CHUNK_SIZE, totalLength - totalWritten);
+        
+        err = afc_file_write(handle, dataBytes + totalWritten, chunkSize);
+        if (err) {
+            NSLog(@"[afcPushFile] ERROR: Failed to write file data chunk at offset %zu - code:%d, msg:%s",
+                  totalWritten, err->code, err->message);
+            
+            // Provide detailed error message based on error code
+            NSString *errorMsg;
+            switch (err->code) {
+                case -60: // ETIMEDOUT
+                    errorMsg = [NSString stringWithFormat:@"Write operation timed out at %zu/%lu bytes. The file may be too large or connection is too slow.",
+                               totalWritten, (unsigned long)totalLength];
+                    break;
+                case -28: // ENOSPC
+                    errorMsg = @"Insufficient storage space on device.";
+                    break;
+                default:
+                    errorMsg = [NSString stringWithFormat:@"Failed to write file data (code:%d) at offset %zu/%lu bytes",
+                               err->code, totalWritten, (unsigned long)totalLength];
+                    break;
+            }
+            
+            *error = [self errorWithStr:errorMsg code:err->code];
+            idevice_error_free(err);
+            afc_file_close(handle);
+            afc_client_free(client);
+            return NO;
+        }
+        
+        totalWritten += chunkSize;
+        
+        // Log progress for large files
+        if (totalLength > 1024 * 1024) { // Log progress for files > 1MB
+            NSLog(@"[afcPushFile] Progress: %zu/%lu bytes (%.1f%%)",
+                  totalWritten, (unsigned long)totalLength,
+                  (totalWritten * 100.0) / totalLength);
+        }
+    }
+    
+    NSLog(@"[afcPushFile] File data written successfully: %lu bytes", (unsigned long)fileData.length);
+    
+    // Close file handle
+    err = afc_file_close(handle);
+    if (err) {
+        NSLog(@"[afcPushFile] WARNING: Failed to close file handle - code:%d, msg:%s", err->code, err->message);
+        idevice_error_free(err);
+        // Continue anyway as data is written
+    }
+    
+    // Clean up AFC client
     afc_client_free(client);
+    
+    NSLog(@"[afcPushFile] File push completed successfully");
     return YES;
 }
 
@@ -951,6 +1098,34 @@ static NSString * const kDDIPathLegacy = @"/Developer/Library";
             image_mounter_free(imageMounter);
         }
     }
+}
+
+// MARK: - Personalized DDI Mounting (like StikDebug)
+
+- (NSUInteger)getMountedDeviceCount:(NSError**)error {
+    if (!provider) {
+        if (error) {
+            *error = [self errorWithStr:@"Provider not initialized. Start heartbeat first." code:-1];
+        }
+        return 0;
+    }
+    [self ensureHeartbeat];
+    return getMountedDeviceCount(provider, error);
+}
+
+- (NSInteger)mountPersonalDDIWithImagePath:(NSString*)imagePath trustcachePath:(NSString*)trustcachePath manifestPath:(NSString*)manifestPath error:(NSError**)error {
+    if (!provider) {
+        if (error) {
+            *error = [self errorWithStr:@"Provider not initialized. Start heartbeat first." code:-1];
+        }
+        return -1;
+    }
+    [self ensureHeartbeat];
+    IdevicePairingFile* pairing = [self getPairingFileWithError:error];
+    if (!pairing) {
+        return -1;
+    }
+    return mountPersonalDDI(provider, pairing, imagePath, trustcachePath, manifestPath, error);
 }
 
 @end

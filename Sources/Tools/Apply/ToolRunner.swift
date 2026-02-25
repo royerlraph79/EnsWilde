@@ -17,7 +17,7 @@ final class ToolRunner: ObservableObject {
     }
 
     /// Run enabled tools using unified BookRestore approach.
-    func applyAll(isSystemReady: Bool, store: ToolStore, walletStore: AppleWalletStore, themeStore: PasscodeThemeStore) async {
+    func applyAll(isSystemReady: Bool, store: ToolStore, walletStore: AppleWalletStore, themeStore: PasscodeThemeStore, featureFlagsStore: FeatureFlagsStore) async {
         guard isSystemReady else {
             state = .failed(message: "System not ready (Pairing + Heartbeat + DDI required). DDI auto-mount may still be in progress.")
             return
@@ -30,8 +30,9 @@ final class ToolRunner: ObservableObject {
         let hasAppleWallet = walletStore.appleWalletEnabled
         let hasPasscodeTheme = themeStore.passcodeThemeEnabled
         let hasThemesUI = store.themesUIEnabled
+        let hasFeatureFlags = featureFlagsStore.featureFlagsEnabled
         
-        if !hasDisableSound && !hasMobileGestalt && !hasZPatchCustom && !hasAppleWallet && !hasPasscodeTheme && !hasThemesUI {
+        if !hasDisableSound && !hasMobileGestalt && !hasZPatchCustom && !hasAppleWallet && !hasPasscodeTheme && !hasThemesUI && !hasFeatureFlags {
             state = .failed(message: "No tools enabled.")
             return
         }
@@ -45,6 +46,7 @@ final class ToolRunner: ObservableObject {
         if hasAppleWallet { enabledToolNames.append("Apple Wallet") }
         if hasPasscodeTheme { enabledToolNames.append("Passcode Theme") }
         if hasThemesUI { enabledToolNames.append("Themes UI") }
+        if hasFeatureFlags { enabledToolNames.append("Feature Flags") }
         
         log("Apply started. Enabled tools: \(enabledToolNames.joined(separator: ", "))")
 
@@ -98,6 +100,14 @@ final class ToolRunner: ObservableObject {
                 let themesUIFiles = try collectThemesUIFiles()
                 allFiles.append(contentsOf: themesUIFiles)
                 log("Collected \(themesUIFiles.count) file(s) from Themes UI")
+            }
+            
+            if hasFeatureFlags {
+                state = .running(toolName: "Feature Flags")
+                log("Collecting files from: Feature Flags")
+                let featureFlagsFiles = try collectFeatureFlagsFiles(featureFlagsStore: featureFlagsStore)
+                allFiles.append(contentsOf: featureFlagsFiles)
+                log("Collected \(featureFlagsFiles.count) file(s) from Feature Flags")
             }
             
             // Apply all files together using unified BookRestore task
@@ -213,6 +223,7 @@ final class ToolRunner: ObservableObject {
     /// Important: Files must be collected in specific order for proper rendering:
     /// 1. Background images (.pkpass) MUST be processed first
     /// 2. Cache files (FrontFace, PlaceHolder, Preview) processed after
+    /// 3. pass.json (if imported) applied last
     private func collectAppleWalletFiles(walletStore: AppleWalletStore) throws -> [BookRestoreFile] {
         // Get enabled cards
         let enabledCards = walletStore.enabledCards()
@@ -255,6 +266,13 @@ final class ToolRunner: ObservableObject {
                 let uniqueMediaName = "wallet_\(cardPrefix)_Preview"
                 allFiles.append(.walletImage(targetPath: previewPath, contents: previewData, mediaFileName: uniqueMediaName))
             }
+            
+            // Step 3: Add pass.json after card images (if imported)
+            if let passJSONData = card.loadPassJSON() {
+                let passJSONPath = "\(cardBasePath).pkpass/pass.json"
+                let uniqueMediaName = "wallet_\(cardPrefix)_pass.json"
+                allFiles.append(.walletImage(targetPath: passJSONPath, contents: passJSONData, mediaFileName: uniqueMediaName))
+            }
         }
         
         guard !allFiles.isEmpty else {
@@ -270,6 +288,10 @@ final class ToolRunner: ObservableObject {
         guard let selectedTheme = themeStore.getSelectedTheme() else {
             throw ToolTaskError.generic("Passcode Theme is enabled but no theme is selected. Please select a theme.")
         }
+        
+        // Use global settings from store
+        let globalPrefix = themeStore.globalCustomPrefix
+        let globalTelephony = themeStore.globalTelephonyVersion
         
         // Get all image files from the theme
         let imageFiles = selectedTheme.getImageFiles()
@@ -289,7 +311,7 @@ final class ToolRunner: ObservableObject {
             }
             
             let suffix = String(filename[firstHyphen...])
-            let newFilename = selectedTheme.customPrefix.rawValue + suffix
+            let newFilename = globalPrefix.rawValue + suffix
             
             // Load and process image
             guard let image = UIImage(contentsOfFile: sourceURL.path) else {
@@ -308,8 +330,8 @@ final class ToolRunner: ObservableObject {
                 continue
             }
             
-            // Target path in TelephonyUI cache (use selected telephony version, passcode only)
-            let targetPath = selectedTheme.telephonyVersion.cachePath + newFilename
+            // Target path in TelephonyUI cache (use global telephony version)
+            let targetPath = globalTelephony.cachePath + newFilename
             
             // Use .custom file type (zassetpath approach)
             files.append(.custom(targetPath: targetPath, contents: imageData))
@@ -322,21 +344,30 @@ final class ToolRunner: ObservableObject {
         return files
     }
     
-    /// Collect files for Themes UI tool (Global Preferences)
+    /// Collect files for Themes UI tool (Global Preferences + Springboard Preferences)
     private func collectThemesUIFiles() throws -> [BookRestoreFile] {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let globalPrefsURL = docs.appendingPathComponent("GlobalPreferences.plist")
         
         guard FileManager.default.fileExists(atPath: globalPrefsURL.path) else {
-            throw ToolTaskError.generic("Missing GlobalPreferences.plist. Open Themes UI tool and save settings first.")
+            throw ToolTaskError.generic("Missing GlobalPreferences.plist. Open Themes UI tool first.")
         }
         
         let globalPrefsData = try Data(contentsOf: globalPrefsURL)
-        let targetPath = "/var/Managed Preferences/mobile/.GlobalPreferences.plist"
-        
-        return [
-            .custom(targetPath: targetPath, contents: globalPrefsData)
+        var files: [BookRestoreFile] = [
+            .custom(targetPath: "/var/Managed Preferences/mobile/.GlobalPreferences.plist", contents: globalPrefsData)
         ]
+        
+        // SpringboardPreferences.plist is always written by autoSave() with the current
+        // SBSuppressDynamicIslandCompletely value (true or false). Sending `false` explicitly
+        // ensures the device removes DI suppression when the toggle is turned off.
+        let springboardPrefsURL = docs.appendingPathComponent("SpringboardPreferences.plist")
+        if FileManager.default.fileExists(atPath: springboardPrefsURL.path) {
+            let springboardData = try Data(contentsOf: springboardPrefsURL)
+            files.append(.custom(targetPath: "/var/Managed Preferences/mobile/com.apple.springboard.plist", contents: springboardData))
+        }
+        
+        return files
     }
     
     /// FIXED: Resize passcode image based on detected size and target size (matching Python logic exactly)
@@ -402,5 +433,32 @@ final class ToolRunner: ObservableObject {
         return renderer.image { context in
             image.draw(in: CGRect(origin: .zero, size: targetPixelSize))
         }
+    }
+}
+
+// MARK: - Feature Flags Extension
+
+extension ToolRunner {
+    /// Collect files for Feature Flags tool
+    func collectFeatureFlagsFiles(featureFlagsStore: FeatureFlagsStore) throws -> [BookRestoreFile] {
+        var files: [BookRestoreFile] = []
+        
+        // If folder creation is enabled, create the FeatureFlags directory via BookRestore.
+        // Using .featureFlags type ensures the entry is included in ZBLDOWNLOADINFO so that
+        // bookassetd actually writes the placeholder and creates /var/preferences/FeatureFlags/.
+        if featureFlagsStore.folderCreated {
+            files.append(.featureFlags(targetPath: "/var/preferences/FeatureFlags/Placeholder", contents: Data()))
+        }
+        
+        // Generate Feature Flags plist (now allows empty for reset)
+        guard let plistData = featureFlagsStore.generateFeatureFlagsPlist() else {
+            throw ToolTaskError.generic("Failed to generate Feature Flags plist.")
+        }
+        
+        // Use obfuscated path for Feature Flags
+        let targetPath = ObfuscatedPaths.featureFlags
+        files.append(.featureFlags(targetPath: targetPath, contents: plistData))
+        
+        return files
     }
 }

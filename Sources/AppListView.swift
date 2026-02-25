@@ -20,7 +20,7 @@ struct AppItemView: View {
             } label: {
                 Text("View app details")
             }
-            Section {
+            Section(header: Text("Arbitrary read exploit")) {
                 if let bundlePath = appDetails["Path"] {
                     Button("Copy app bundle folder") {
                         UIPasteboard.general.string = "file://a\(bundlePath)"
@@ -31,10 +31,6 @@ struct AppItemView: View {
                         UIPasteboard.general.string = "file://a\(containerPath)"
                     }
                 }
-            } header: {
-                Text("Arbitrary read exploit")
-            } footer: {
-                Text("After copying path, open Settings, paste it in search bar, select all again and tap Share.\n\nOnly supported on iOS ≤ 18.2b1 and iOS 26.x. For this exploit, folders can only be shared via AirDrop.\nIf you're sharing App Store apps, please note that it will still remain encrypted.")
             }
         }
         .navigationTitle((appDetails["CFBundleName"] as? String) ?? bundleID)
@@ -121,6 +117,7 @@ struct AppListView: View {
         }
         .searchable(text: $searchString)
         .navigationTitle("App list")
+        .navigationBarTitleDisplayMode(.inline)
     }
     
     init() {

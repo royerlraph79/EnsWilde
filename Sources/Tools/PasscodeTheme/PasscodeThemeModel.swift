@@ -259,6 +259,18 @@ struct PasscodeTheme: Identifiable, Codable {
 class PasscodeThemeStore: ObservableObject {
     @Published var themes: [PasscodeTheme] = []
     @AppStorage("PasscodeThemeEnabled") var passcodeThemeEnabled: Bool = false
+    @AppStorage("GlobalPasscodeLanguage") var globalCustomPrefixRaw: String = "en"
+    @AppStorage("GlobalTelephonyVersion") var globalTelephonyVersionRaw: String = "TelephonyUI-10"
+    
+    var globalCustomPrefix: PasscodeTheme.PrefixLanguage {
+        get { PasscodeTheme.PrefixLanguage(rawValue: globalCustomPrefixRaw) ?? .en }
+        set { globalCustomPrefixRaw = newValue.rawValue }
+    }
+    
+    var globalTelephonyVersion: PasscodeTheme.TelephonyVersion {
+        get { PasscodeTheme.TelephonyVersion(rawValue: globalTelephonyVersionRaw) ?? .telephony10 }
+        set { globalTelephonyVersionRaw = newValue.rawValue }
+    }
     
     private let themesFileURL: URL
     

@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import ZIPFoundation
 
 // MARK: - Passcode Theme View
 struct PasscodeThemeView: View {
@@ -7,6 +8,7 @@ struct PasscodeThemeView: View {
     @ObservedObject var themeStore: PasscodeThemeStore
     @StateObject private var viewModel: PasscodeThemeViewModel
     @State private var showImportSheet = false
+    @State private var showDefaultImportSheet = false
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
     
@@ -16,77 +18,67 @@ struct PasscodeThemeView: View {
     }
     
     var body: some View {
-        ZStack {
-            AppTheme.bg.ignoresSafeArea()
+        Form {
+            Section(header: Text(L("passcode_theme_manager"))) {
+                Toggle(L("passcode_enable_theme"), isOn: $themeStore.passcodeThemeEnabled)
+            }
             
-            ScrollView {
-                VStack(spacing: 20) {
-                    AppSectionHeader(title: L("passcode_theme_manager"))
-                    
-                    // Enable Toggle
-                    CardRow(
-                        title: L("passcode_enable_theme"),
-                        subtitle: themeStore.passcodeThemeEnabled ? L("enabled") : L("disabled"),
-                        ok: nil,
-                        showChevron: false,
-                        trailing: AnyView(Toggle("", isOn: $themeStore.passcodeThemeEnabled).labelsHidden())
-                    )
-                    .padding(.horizontal, 20)
-                    
-                    Text(L("msg_tool_enable_instruction"))
-                        .font(.system(size: 14, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    
-                    // Theme Library
-                    AppSectionHeader(title: L("section_theme_library"))
-                    
-                    if themeStore.themes.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "photo.on.rectangle.angled")
-                                .font(.system(size: 48))
-                                .foregroundStyle(Color.white.opacity(0.3))
-                            Text(L("passcode_no_themes"))
-                                .font(.system(size: 16, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
-                    } else {
-                        VStack(spacing: 12) {
-                            ForEach(themeStore.themes) { theme in
-                                NavigationLink(destination: ThemeDetailView(theme: theme, themeStore: themeStore, viewModel: viewModel)) {
-                                    ThemeRowView(theme: theme, themeStore: themeStore)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 20)
+            // Global Settings — applies to all passcode themes
+            Section(header: Text(L("global_settings"))) {
+                // Language / Method
+                Picker(L("passcode_language_method"), selection: $themeStore.globalCustomPrefixRaw) {
+                    ForEach(PasscodeTheme.PrefixLanguage.allCases, id: \.self) { prefix in
+                        Text(prefix.displayName).tag(prefix.rawValue)
                     }
-                    
-                    // Import Button
-                    AppSectionHeader(title: L("section_import_theme"))
-                    
-                    WalletStyleButton(title: L("passcode_import_file")) {
-                        showImportSheet = true
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    Text(L("passcode_import_desc"))
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.bottom, 20)
                 }
-                .padding(.top, 6)
+                
+                // Telephony Version
+                Picker(L("passcode_telephony_version"), selection: $themeStore.globalTelephonyVersionRaw) {
+                    ForEach(PasscodeTheme.TelephonyVersion.allCases, id: \.self) { version in
+                        Text(version.displayName).tag(version.rawValue)
+                    }
+                }
+            }
+            
+            Section(header: Text(L("section_theme_library"))) {
+                if themeStore.themes.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.secondary)
+                        Text(L("passcode_no_themes"))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                } else {
+                    ForEach(themeStore.themes) { theme in
+                        NavigationLink(destination: ThemeDetailView(theme: theme, themeStore: themeStore, viewModel: viewModel)) {
+                            ThemeRowView(theme: theme, themeStore: themeStore)
+                        }
+                    }
+                }
+            }
+            
+            Section(header: Text(L("section_import_theme"))) {
+                Button(L("passcode_import_file")) {
+                    showImportSheet = true
+                }
+                
+                Button(L("passcode_import_default_zip")) {
+                    showDefaultImportSheet = true
+                }
             }
         }
+        .headerProminence(.increased)
         .navigationTitle(L("tool_passcode_theme"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showImportSheet) {
             ImportThemeSheet(viewModel: viewModel, themeStore: themeStore)
+        }
+        .sheet(isPresented: $showDefaultImportSheet) {
+            ImportDefaultPasscodeSheet(viewModel: viewModel, themeStore: themeStore)
         }
         .alert(L("alert_error"), isPresented: $showErrorAlert) {
             Button(L("alert_ok")) {}
@@ -108,45 +100,37 @@ struct ThemeRowView: View {
                 Image(uiImage: previewImage)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-                    .frame(width: 60, height: 60)
+                    .frame(width: 50, height: 50)
                     .cornerRadius(8)
             } else {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.gray.opacity(0.3))
-                    .frame(width: 60, height: 60)
+                    .frame(width: 50, height: 50)
                     .overlay(
                         Image(systemName: "photo")
-                            .foregroundStyle(Color.white.opacity(0.5))
+                            .foregroundStyle(.secondary)
                     )
             }
             
             // Theme Info
             VStack(alignment: .leading, spacing: 4) {
                 Text(theme.name)
-                    .font(.system(size: 17, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white)
-                Text("\(theme.customPrefix.rawValue) • \(theme.keySize.rawValue) • \(theme.telephonyVersion.rawValue)")
-                    .font(.system(size: 13, design: .rounded))
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .font(.body)
+                Text("\(theme.keySize.rawValue)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             
             Spacer()
             
             // Selection Radio Button
             Image(systemName: theme.isSelected ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 24))
-                .foregroundStyle(theme.isSelected ? .green : Color.white.opacity(0.3))
+                .font(.system(size: 22))
+                .foregroundStyle(theme.isSelected ? .green : .secondary)
                 .onTapGesture {
                     themeStore.selectTheme(theme)
                 }
-            
-            Image(systemName: "chevron.right")
-                .foregroundStyle(Color.white.opacity(0.55))
-                .font(.system(size: 14, weight: .semibold))
         }
-        .padding(18)
-        .background(AppTheme.row)
-        .cornerRadius(16)
     }
 }
 
@@ -160,192 +144,108 @@ struct ThemeDetailView: View {
     @Environment(\.dismiss) var dismiss
     
     var body: some View {
-        ZStack {
-            AppTheme.bg.ignoresSafeArea()
-            
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Preview
-                    AppSectionHeader(title: L("section_preview"))
-                    
-                    if let previewImage = theme.getPreviewImage() {
-                        VStack(spacing: 12) {
-                            Image(uiImage: previewImage)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(height: 120)
-                                .cornerRadius(12)
-                                .padding(.horizontal, 20)
-                            
-                            Button {
-                                showFullPreview = true
-                            } label: {
-                                HStack {
-                                    Image(systemName: "eye.fill")
-                                    Text(L("passcode_view_all_keys"))
-                                }
-                                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(AppTheme.row)
-                                .cornerRadius(12)
-                            }
-                            .padding(.horizontal, 20)
-                        }
-                    }
-                    
-                    // Theme Info
-                    AppSectionHeader(title: L("section_theme_settings"))
-                    
+        Form {
+            // Preview
+            Section(header: Text(L("section_preview"))) {
+                if let previewImage = theme.getPreviewImage() {
                     VStack(spacing: 12) {
-                        // Theme Name
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(L("passcode_theme_name"))
-                                    .font(.system(size: 13, design: .rounded))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                                TextField(L("passcode_theme_name"), text: $theme.name)
-                                    .font(.system(size: 17, weight: .medium, design: .rounded))
-                                    .foregroundStyle(.white)
-                                    .onChange(of: theme.name) { _ in themeStore.updateTheme(theme) }
-                            }
-                            Spacer()
-                        }
-                        .padding(18)
-                        .background(AppTheme.row)
-                        .cornerRadius(16)
+                        Image(uiImage: previewImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(height: 120)
+                            .cornerRadius(12)
                         
-                        // Custom Prefix Picker
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(L("passcode_language_method"))
-                                    .font(.system(size: 13, design: .rounded))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                                
-                                Picker("Language Prefix", selection: $theme.customPrefix) {
-                                    ForEach(PasscodeTheme.PrefixLanguage.allCases, id: \.self) { prefix in
-                                        Text(prefix.displayName).tag(prefix)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .tint(.white)
-                                .onChange(of: theme.customPrefix) { _ in themeStore.updateTheme(theme) }
-                                
-                                Text(theme.customPrefix.description)
-                                    .font(.system(size: 12, design: .rounded))
-                                    .foregroundStyle(AppTheme.textSecondary)
+                        Button {
+                            showFullPreview = true
+                        } label: {
+                            HStack {
+                                Image(systemName: "eye.fill")
+                                Text(L("passcode_view_all_keys"))
                             }
-                            Spacer()
                         }
-                        .padding(18)
-                        .background(AppTheme.row)
-                        .cornerRadius(16)
-                        
-                        // Detected Size Info
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(L("passcode_detected_size"))
-                                    .font(.system(size: 13, design: .rounded))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                                Text(sizeDescription(for: theme.detectedSize))
-                                    .font(.system(size: 17, weight: .medium, design: .rounded))
-                                    .foregroundStyle(.white)
-                            }
-                            Spacer()
-                            Image(systemName: "info.circle")
-                                .foregroundStyle(AppTheme.textSecondary)
-                        }
-                        .padding(18)
-                        .background(AppTheme.row)
-                        .cornerRadius(16)
-                        
-                        // Key Size (FIXED: Changed label from detected_size to target_key_size)
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(L("passcode_target_key_size"))
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                            
-                            Picker("Key Size", selection: $theme.keySize) {
-                                ForEach(PasscodeTheme.KeySize.allCases, id: \.self) { size in
-                                    Text(size.rawValue).tag(size)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .onChange(of: theme.keySize) { _ in themeStore.updateTheme(theme) }
-                            
-                            Text(scalingDescription(from: theme.detectedSize, to: theme.keySize))
-                                .font(.system(size: 12, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                        }
-                        .padding(18)
-                        .background(AppTheme.row)
-                        .cornerRadius(16)
-                        
-                        // Telephony Version Picker
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(L("passcode_telephony_version"))
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                            
-                            Picker(L("passcode_telephony_version"), selection: $theme.telephonyVersion) {
-                                ForEach(PasscodeTheme.TelephonyVersion.allCases, id: \.self) { version in
-                                    Text(version.displayName).tag(version)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .onChange(of: theme.telephonyVersion) { _ in themeStore.updateTheme(theme) }
-                            
-                            Text(L("passcode_telephony_desc"))
-                                .font(.system(size: 12, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                        }
-                        .padding(18)
-                        .background(AppTheme.row)
-                        .cornerRadius(16)
-                        
-                        // Selection
-                        CardRow(
-                            title: L("passcode_selected_theme"),
-                            subtitle: theme.isSelected ? L("passcode_theme_selected") : L("passcode_theme_not_selected"),
-                            ok: theme.isSelected ? true : nil,
-                            showChevron: false,
-                            trailing: AnyView(
-                                Button {
-                                    themeStore.selectTheme(theme)
-                                    theme.isSelected = true
-                                } label: {
-                                    Text(theme.isSelected ? L("passcode_selected") : L("passcode_select"))
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(theme.isSelected ? .green : .white)
-                                }
-                            )
-                        )
                     }
-                    .padding(.horizontal, 20)
-                    
-                    // Files Info
-                    AppSectionHeader(title: L("section_theme_files"))
-                    
-                    let imageFiles = theme.getImageFiles()
-                    Text("\(imageFiles.count) image file(s) found")
-                        .font(.system(size: 14, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 24)
-                    
-                    // Delete
-                    AppSectionHeader(title: L("section_danger_zone"))
-                    
-                    SecondaryActionButton(title: L("passcode_delete_theme")) {
-                        showDeleteAlert = true
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 20)
                 }
-                .padding(.top, 6)
+            }
+            
+            // Theme Info
+            Section(header: Text(L("section_theme_settings"))) {
+                // Theme Name
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L("passcode_theme_name"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(L("passcode_theme_name"), text: $theme.name)
+                        .onChange(of: theme.name) { _ in themeStore.updateTheme(theme) }
+                }
+                
+                // Detected Size Info
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L("passcode_detected_size"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(sizeDescription(for: theme.detectedSize))
+                    }
+                    Spacer()
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+                
+                // Key Size
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L("passcode_target_key_size"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    
+                    Picker("Key Size", selection: $theme.keySize) {
+                        ForEach(PasscodeTheme.KeySize.allCases, id: \.self) { size in
+                            Text(size.rawValue).tag(size)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: theme.keySize) { _ in themeStore.updateTheme(theme) }
+                    
+                    Text(scalingDescription(from: theme.detectedSize, to: theme.keySize))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                
+                // Selection
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(L("passcode_selected_theme"))
+                        Text(theme.isSelected ? L("passcode_theme_selected") : L("passcode_theme_not_selected"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        themeStore.selectTheme(theme)
+                        theme.isSelected = true
+                    } label: {
+                        Text(theme.isSelected ? L("passcode_selected") : L("passcode_select"))
+                            .foregroundStyle(theme.isSelected ? .green : .accentColor)
+                    }
+                }
+            }
+            
+            // Files Info
+            Section(header: Text(L("section_theme_files"))) {
+                let imageFiles = theme.getImageFiles()
+                Text("\(imageFiles.count) image file(s) found")
+                    .foregroundStyle(.secondary)
+            }
+            
+            // Delete
+            Section(header: Text(L("section_danger_zone"))) {
+                Button(role: .destructive) {
+                    showDeleteAlert = true
+                } label: {
+                    Text(L("passcode_delete_theme"))
+                }
             }
         }
+        .headerProminence(.increased)
         .navigationTitle(theme.name)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showFullPreview) {
@@ -358,7 +258,7 @@ struct ThemeDetailView: View {
                 dismiss()
             }
         } message: {
-            Text("Are you sure you want to delete this theme? This action cannot be undone.")
+            Text(L("passcode_delete_confirm"))
         }
     }
     
@@ -401,33 +301,28 @@ struct ImportThemeSheet: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                AppTheme.bg.ignoresSafeArea()
+            Form {
+                if let url = selectedFileURL {
+                    Section {
+                        Text(L("file_selected").replacingOccurrences(of: "{name}", with: url.lastPathComponent))
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 
-                VStack(spacing: 20) {
-                    if let url = selectedFileURL {
-                        Text("Selected: \(url.lastPathComponent)")
-                            .font(.system(size: 14, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
+                Section(header: Text(L("theme_information"))) {
+                    TextField(L("passcode_theme_name"), text: $themeName)
+                        .autocorrectionDisabled()
+                }
+                
+                Section {
+                    Button(L("select_file")) {
+                        showFilePicker = true
                     }
-                    
-                    Form {
-                        Section(header: Text("Theme Information")) {
-                            TextField(L("passcode_theme_name"), text: $themeName)
-                                .autocorrectionDisabled()
-                        }
-                        
-                        Section {
-                            Button("Select .passthm File") {
-                                showFilePicker = true
-                            }
-                        }
-                    }
-                    .scrollContentBackground(.hidden)
-                    
-                    if isImporting {
-                        ProgressView("Importing theme...")
-                            .tint(AppTheme.accent)
+                }
+                
+                if isImporting {
+                    Section {
+                        ProgressView(L("importing"))
                     }
                 }
             }
@@ -438,7 +333,7 @@ struct ImportThemeSheet: View {
                     Button(L("alert_cancel")) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Import") {
+                    Button(L("alert_import")) {
                         importTheme()
                     }
                     .disabled(themeName.isEmpty || selectedFileURL == nil || isImporting)
@@ -491,6 +386,160 @@ struct ImportThemeSheet: View {
     }
 }
 
+// MARK: - Import Default Passcode Sheet (ZIP with Telephony-X folder)
+struct ImportDefaultPasscodeSheet: View {
+    @Environment(\.dismiss) var dismiss
+    @ObservedObject var viewModel: PasscodeThemeViewModel
+    @ObservedObject var themeStore: PasscodeThemeStore
+    @State private var themeName = ""
+    @State private var showFilePicker = false
+    @State private var selectedFileURL: URL?
+    @State private var isImporting = false
+    @State private var errorMessage: String?
+    @State private var detectedInfo = ""
+    
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let url = selectedFileURL {
+                    Section {
+                        Text(L("file_selected").replacingOccurrences(of: "{name}", with: url.lastPathComponent))
+                            .foregroundStyle(.secondary)
+                        if !detectedInfo.isEmpty {
+                            Text(detectedInfo)
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                }
+                
+                Section(header: Text(L("theme_information"))) {
+                    TextField(L("passcode_theme_name"), text: $themeName)
+                        .autocorrectionDisabled()
+                }
+                
+                Section {
+                    Button(L("passcode_select_zip")) {
+                        showFilePicker = true
+                    }
+                }
+                
+                if isImporting {
+                    Section {
+                        ProgressView(L("importing"))
+                    }
+                }
+            }
+            .navigationTitle(L("passcode_import_default_title"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L("alert_cancel")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L("alert_import")) {
+                        importDefaultPasscode()
+                    }
+                    .disabled(themeName.isEmpty || selectedFileURL == nil || isImporting)
+                }
+            }
+            .fileImporter(
+                isPresented: $showFilePicker,
+                allowedContentTypes: [.zip, .data],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    if let url = urls.first {
+                        selectedFileURL = url
+                        if themeName.isEmpty {
+                            themeName = url.deletingPathExtension().lastPathComponent
+                        }
+                        // Preview: detect telephony and language from ZIP
+                        previewZIPContents(url: url)
+                    }
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                }
+            }
+            .alert(L("alert_error"), isPresented: .constant(errorMessage != nil)) {
+                Button(L("alert_ok")) { errorMessage = nil }
+            } message: {
+                if let error = errorMessage {
+                    Text(error)
+                }
+            }
+        }
+    }
+    
+    private func previewZIPContents(url: URL) {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+        
+        // Copy to temp to read
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: tempURL)
+        guard let _ = try? FileManager.default.copyItem(at: url, to: tempURL) else { return }
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        
+        guard let archive = try? Archive(url: tempURL, accessMode: .read) else { return }
+        
+        var telephonyFolder: String?
+        var languageCode: String?
+        
+        for entry in archive {
+            let path = entry.path
+            let components = path.split(separator: "/")
+            
+            // Look for Telephony-X folder
+            for comp in components {
+                let compStr = String(comp)
+                if compStr.hasPrefix("Telephony") {
+                    telephonyFolder = compStr
+                }
+            }
+            
+            // Detect language code from image filenames like "other-2-A B C--white.png"
+            if languageCode == nil {
+                let filename = (path as NSString).lastPathComponent
+                let ext = (filename as NSString).pathExtension.lowercased()
+                if ext == "png" || ext == "jpg" || ext == "jpeg" {
+                    if let firstHyphen = filename.firstIndex(of: "-") {
+                        let prefix = String(filename[filename.startIndex..<firstHyphen])
+                        if !prefix.isEmpty {
+                            languageCode = prefix
+                        }
+                    }
+                }
+            }
+        }
+        
+        var info: [String] = []
+        if let tf = telephonyFolder { info.append("Telephony: \(tf)") }
+        if let lc = languageCode { info.append("Language: \(lc)") }
+        detectedInfo = info.joined(separator: " • ")
+    }
+    
+    private func importDefaultPasscode() {
+        guard let url = selectedFileURL else { return }
+        
+        isImporting = true
+        Task {
+            do {
+                try await viewModel.importDefaultPasscode(from: url, name: themeName, themeStore: themeStore)
+                await MainActor.run {
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = error.localizedDescription
+                    isImporting = false
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Full Passcode Preview Sheet
 struct FullPasscodePreviewSheet: View {
     let theme: PasscodeTheme
@@ -498,74 +547,63 @@ struct FullPasscodePreviewSheet: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                AppTheme.bg.ignoresSafeArea()
+            Form {
+                Section {
+                    Text(L("passcode_all_keys_from").replacingOccurrences(of: "{name}", with: theme.name))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
                 
-                ScrollView {
-                    VStack(spacing: 20) {
-                        // Info
-                        Text("All passcode keys from \(theme.name)")
-                            .font(.system(size: 14, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
-                            .padding(.top, 10)
-                        
-                        // Get all passcode key images
-                        let keyImages = getAllPasscodeKeyImages()
-                        
-                        if keyImages.isEmpty {
-                            VStack(spacing: 12) {
-                                Image(systemName: "photo.on.rectangle.angled")
-                                    .font(.system(size: 48))
-                                    .foregroundStyle(Color.white.opacity(0.3))
-                                Text("No passcode key images found")
-                                    .font(.system(size: 16, design: .rounded))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 60)
-                        } else {
-                            // Display keys in a grid (3 columns for numeric keypad layout)
-                            LazyVGrid(columns: [
-                                GridItem(.flexible(), spacing: 12),
-                                GridItem(.flexible(), spacing: 12),
-                                GridItem(.flexible(), spacing: 12)
-                            ], spacing: 12) {
-                                ForEach(keyImages, id: \.key) { item in
-                                    if item.key == "empty" {
-                                        // Empty placeholder
-                                        Color.clear
+                let keyImages = getAllPasscodeKeyImages()
+                
+                if keyImages.isEmpty {
+                    Section {
+                        VStack(spacing: 12) {
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.secondary)
+                            Text(L("passcode_no_key_images"))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 60)
+                    }
+                } else {
+                    Section {
+                        LazyVGrid(columns: [
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12)
+                        ], spacing: 12) {
+                            ForEach(keyImages, id: \.key) { item in
+                                if item.key == "empty" {
+                                    Color.clear
+                                        .frame(maxWidth: 100, maxHeight: 100)
+                                } else {
+                                    VStack(spacing: 6) {
+                                        Image(uiImage: item.image)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
                                             .frame(maxWidth: 100, maxHeight: 100)
-                                    } else {
-                                        VStack(spacing: 6) {
-                                            Image(uiImage: item.image)
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fit)
-                                                .frame(maxWidth: 100, maxHeight: 100)
-                                                .cornerRadius(8)
-                                            
-                                            Text(item.label)
-                                                .font(.system(size: 11, weight: .medium, design: .rounded))
-                                                .foregroundStyle(AppTheme.textSecondary)
-                                        }
+                                            .cornerRadius(8)
+                                        
+                                        Text(item.label)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
                                     }
                                 }
                             }
-                            .padding(.horizontal, 20)
-                            
-                            Text("\(keyImages.count) key image(s)")
-                                .font(.system(size: 12, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                                .padding(.top, 10)
-                                .padding(.bottom, 20)
                         }
                     }
                 }
             }
-            .navigationTitle("All Passcode Keys")
+            .headerProminence(.increased)
+            .navigationTitle(L("passcode_all_keys"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button(L("alert_done")) { dismiss() }
                 }
             }
         }

@@ -14,49 +14,31 @@ struct zPatchCustomView: View {
     @State private var editingPatch: zPatchItem? = nil
     
     var body: some View {
-        ZStack {
-            AppTheme.bg.ignoresSafeArea()
+        Form {
+            Section(header: Text(L("tool_zpatch_custom"))) {
+                Toggle(L("enable_tweak"), isOn: $enabled)
+            }
             
-            ScrollView {
-                VStack(spacing: 20) {
-                    AppSectionHeader(title: "zPatch Custom")
-                    
-                    // Enable Toggle
-                    CardRow(
-                        title: "Enable Tweak",
-                        subtitle: enabled ? "Enabled" : "Disabled",
-                        ok: nil,
-                        showChevron: false,
-                        trailing: AnyView(Toggle("", isOn: $enabled).labelsHidden())
-                    )
-                    .padding(.horizontal, 20)
-                    
-                    // Add New Patch Button
-                    WalletStyleButton(title: "Add New Patch") {
-                        showAddSheet = true
+            Section(header: Text(L("section_patch_list"))) {
+                Button("Add New Patch") {
+                    showAddSheet = true
+                }
+                
+                if !patchStore.patches.isEmpty {
+                    ForEach(patchStore.patches) { patch in
+                        patchRow(patch)
                     }
-                    .padding(.horizontal, 20)
-                    
-                    // List of Patches
-                    if !patchStore.patches.isEmpty {
-                        AppSectionHeader(title: "Patch List")
-                        
-                        ForEach(patchStore.patches) { patch in
-                            patchRow(patch)
-                        }
-                    }
-                    
-                    // Info Text
-                    Text("Add custom file patches. Select a source file and specify a destination path. Enable patches you want to apply.")
-                        .font(.system(size: 14, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 8)
                 }
             }
+            
+            Section(header: Text(L("section_info"))) {
+                Text("Add custom file patches. Select a source file and specify a destination path. Enable patches you want to apply.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .navigationTitle("zPatch Custom")
+        .headerProminence(.increased)
+        .navigationTitle(L("tool_zpatch_custom"))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddSheet) {
             addPatchSheet
@@ -70,7 +52,6 @@ struct zPatchCustomView: View {
     
     private func patchRow(_ patch: zPatchItem) -> some View {
         HStack(spacing: 12) {
-            // Enable Toggle
             Toggle("", isOn: Binding(
                 get: { patch.isEnabled },
                 set: { _ in patchStore.togglePatch(patch) }
@@ -79,22 +60,17 @@ struct zPatchCustomView: View {
             
             VStack(alignment: .leading, spacing: 4) {
                 Text("Source: \(patch.sourcePath.split(separator: "/").last ?? "Unknown")")
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 15, weight: .medium))
                     .lineLimit(1)
                 
                 Text("→ \(patch.destinationPath)")
-                    .font(.system(size: 13, design: .rounded))
-                    .foregroundStyle(AppTheme.textSecondary)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             
             Spacer()
         }
-        .padding(18)
-        .background(AppTheme.row)
-        .cornerRadius(16)
-        .padding(.horizontal, 20)
         .contextMenu {
             Button {
                 editPatch(patch)
@@ -112,64 +88,31 @@ struct zPatchCustomView: View {
     
     private var addPatchSheet: some View {
         NavigationStack {
-            ZStack {
-                AppTheme.bg.ignoresSafeArea()
-                
-                ScrollView {
-                    VStack(spacing: 20) {
-                        AppSectionHeader(title: editingPatch != nil ? "Edit Patch" : "Add New Patch")
-                        
-                        // Source File
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Source File")
-                                .font(.system(size: 15, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white)
-                            
-                            Button {
-                                showFileImporter = true
-                            } label: {
-                                HStack {
-                                    Text(newSourcePath.isEmpty ? "Select File" : newSourcePath.split(separator: "/").last.map(String.init) ?? "Selected")
-                                        .font(.system(size: 15, design: .rounded))
-                                        .foregroundStyle(newSourcePath.isEmpty ? AppTheme.textSecondary : .white)
-                                    Spacer()
-                                    Image(systemName: "folder")
-                                        .foregroundStyle(AppTheme.accent)
-                                }
-                                .padding(18)
-                                .background(AppTheme.row)
-                                .cornerRadius(16)
-                            }
+            Form {
+                Section(header: Text("Source File")) {
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        HStack {
+                            Text(newSourcePath.isEmpty ? "Select File" : newSourcePath.split(separator: "/").last.map(String.init) ?? "Selected")
+                                .foregroundStyle(newSourcePath.isEmpty ? .secondary : .primary)
+                            Spacer()
+                            Image(systemName: "folder")
                         }
-                        .padding(.horizontal, 20)
-                        
-                        // Destination Path
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Destination Path")
-                                .font(.system(size: 15, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white)
-                            
-                            TextField("e.g., /var/mobile/Media/file.txt", text: $newDestPath)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 15, design: .rounded))
-                                .foregroundStyle(.white)
-                                .padding(18)
-                                .background(AppTheme.row)
-                                .cornerRadius(16)
-                                .autocapitalization(.none)
-                                .autocorrectionDisabled()
-                        }
-                        .padding(.horizontal, 20)
-                        
-                        // Save Button
-                        WalletStyleButton(title: editingPatch != nil ? "Update Patch" : "Save Patch", disabled: newSourcePath.isEmpty || newDestPath.isEmpty) {
-                            savePatch()
-                        }
-                        .padding(.horizontal, 20)
-                        
-                        Spacer()
                     }
-                    .padding(.top, 20)
+                }
+                
+                Section(header: Text("Destination Path")) {
+                    TextField("e.g., /var/mobile/Media/file.txt", text: $newDestPath)
+                        .autocapitalization(.none)
+                        .autocorrectionDisabled()
+                }
+                
+                Section(header: Text(L("section_actions"))) {
+                    Button(editingPatch != nil ? "Update Patch" : "Save Patch") {
+                        savePatch()
+                    }
+                    .disabled(newSourcePath.isEmpty || newDestPath.isEmpty)
                 }
             }
             .navigationTitle(editingPatch != nil ? "Edit Patch" : "Add Patch")

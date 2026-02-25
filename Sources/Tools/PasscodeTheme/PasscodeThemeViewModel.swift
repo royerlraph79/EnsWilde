@@ -79,13 +79,16 @@ class PasscodeThemeViewModel: ObservableObject {
     }
     
     // Process and prepare files for apply
-    func processThemeFiles(theme: PasscodeTheme) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
+    func processThemeFiles(theme: PasscodeTheme, globalPrefix: PasscodeTheme.PrefixLanguage? = nil) throws -> [(sourceURL: URL, processedData: Data, targetFilename: String)] {
         var processedFiles: [(URL, Data, String)] = []
         
         let imageFiles = theme.getImageFiles()
         guard !imageFiles.isEmpty else {
             throw PasscodeThemeError.noImagesFound
         }
+        
+        // Use global prefix if provided, otherwise fall back to theme's prefix
+        let prefix = globalPrefix ?? store.globalCustomPrefix
         
         print("[PasscodeTheme] Processing \(imageFiles.count) files with detected size: \(theme.detectedSize), target size: \(theme.keySize)")
         
@@ -100,7 +103,7 @@ class PasscodeThemeViewModel: ObservableObject {
             }
             
             let suffix = String(filename[firstHyphen...])
-            let newFilename = theme.customPrefix.rawValue + suffix
+            let newFilename = prefix.rawValue + suffix
             
             // Load and process image
             guard let image = UIImage(contentsOfFile: sourceURL.path) else {
@@ -258,35 +261,135 @@ class PasscodeThemeViewModel: ObservableObject {
         try? fm.removeItem(at: telephonyFolderURL)
     }
     
+    // Import a default passcode ZIP file
+    // ZIP contains Telephony-8/9/10 folder with images like "other-2-A B C--white.png"
+    // Auto-detects telephony version and language code from the ZIP contents
+    func importDefaultPasscode(from sourceURL: URL, name: String, themeStore: PasscodeThemeStore) async throws {
+        isProcessing = true
+        defer { isProcessing = false }
+        
+        // 1. Access the security-scoped resource
+        let accessing = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessing {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        
+        // 2. Copy to temp
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempFileURL = tempDir.appendingPathComponent(sourceURL.lastPathComponent)
+        try? FileManager.default.removeItem(at: tempFileURL)
+        
+        do {
+            try FileManager.default.copyItem(at: sourceURL, to: tempFileURL)
+        } catch {
+            throw PasscodeThemeError.accessDenied
+        }
+        defer { try? FileManager.default.removeItem(at: tempFileURL) }
+        
+        // 3. Prepare target theme folder
+        let newTheme = PasscodeTheme(name: name)
+        let themeFolder = newTheme.themeFolderURL
+        
+        if !FileManager.default.fileExists(atPath: themeFolder.path) {
+            try FileManager.default.createDirectory(at: themeFolder, withIntermediateDirectories: true)
+        }
+        
+        // 4. Auto-detect size
+        let detectedSize = detectSizeFromZIP(at: tempFileURL)
+        
+        // 5. Unzip
+        do {
+            try FileManager.default.unzipItem(at: tempFileURL, to: themeFolder)
+        } catch {
+            try? FileManager.default.removeItem(at: themeFolder)
+            throw PasscodeThemeError.invalidFormat
+        }
+        
+        // 6. Find Telephony-X folder and auto-set global telephony version
+        let fm = FileManager.default
+        if let contents = try? fm.contentsOfDirectory(atPath: themeFolder.path) {
+            for folderName in contents {
+                // Match Telephony-8, Telephony-9, Telephony-10 or TelephonyUI-8, etc.
+                if folderName.contains("Telephony") {
+                    if folderName.contains("10") {
+                        await MainActor.run { themeStore.globalTelephonyVersion = .telephony10 }
+                    } else if folderName.contains("9") {
+                        await MainActor.run { themeStore.globalTelephonyVersion = .telephony9 }
+                    } else if folderName.contains("8") {
+                        await MainActor.run { themeStore.globalTelephonyVersion = .telephony8 }
+                    }
+                    break
+                }
+            }
+        }
+        
+        // 7. Extract images from Telephony subfolder and detect language code
+        try extractImagesFromTelephonySubfolder(themeFolder: themeFolder)
+        
+        // 8. Detect language code from extracted image filenames
+        if let extractedFiles = try? fm.contentsOfDirectory(atPath: themeFolder.path) {
+            for filename in extractedFiles {
+                let ext = (filename as NSString).pathExtension.lowercased()
+                guard ext == "png" || ext == "jpg" || ext == "jpeg" else { continue }
+                
+                // Extract language code from filename like "other-2-A B C--white.png"
+                if let firstHyphen = filename.firstIndex(of: "-") {
+                    let prefix = String(filename[filename.startIndex..<firstHyphen])
+                    if !prefix.isEmpty {
+                        // Try to match to a known PrefixLanguage
+                        if let knownPrefix = PasscodeTheme.PrefixLanguage(rawValue: prefix) {
+                            await MainActor.run { themeStore.globalCustomPrefix = knownPrefix }
+                        } else {
+                            // Use "other" for unknown language codes
+                            await MainActor.run { themeStore.globalCustomPrefix = .other }
+                        }
+                        break
+                    }
+                }
+            }
+        }
+        
+        // 9. Add theme to store
+        var themeWithSize = newTheme
+        themeWithSize.detectedSize = detectedSize
+        store.addTheme(themeWithSize)
+    }
+    
     // Apply theme using BookRestore exploit
     func applyTheme(_ theme: PasscodeTheme, store: ToolStore, onLogUpdate: ((String) -> Void)? = nil) async throws {
         isProcessing = true
         defer { isProcessing = false }
         
+        // Use global settings from store
+        let globalPrefix = self.store.globalCustomPrefix
+        let globalTelephony = self.store.globalTelephonyVersion
+        
         // Process all image files
-        let processedFiles = try processThemeFiles(theme: theme)
+        let processedFiles = try processThemeFiles(theme: theme, globalPrefix: globalPrefix)
         
         guard !processedFiles.isEmpty else {
             throw PasscodeThemeError.noImagesProcessed
         }
         
-        // Create BookRestoreFile objects with selected Telephony version
+        // Create BookRestoreFile objects with global Telephony version
         var bookRestoreFiles: [BookRestoreFile] = []
         
         for (_, imageData, targetFilename) in processedFiles {
-            // Use selected Telephony version path (passcode only)
-            let targetPath = "\(theme.telephonyVersion.cachePath)\(targetFilename)"
+            // Use global Telephony version path
+            let targetPath = "\(globalTelephony.cachePath)\(targetFilename)"
             
             // Use .custom file type to trigger zassetpath logic
             let file = BookRestoreFile.custom(targetPath: targetPath, contents: imageData)
             bookRestoreFiles.append(file)
         }
         
-        print("[PasscodeTheme] Applying \(bookRestoreFiles.count) files to Passcode - \(theme.telephonyVersion.rawValue)")
+        print("[PasscodeTheme] Applying \(bookRestoreFiles.count) files to Passcode - \(globalTelephony.rawValue)")
         
         // Log to console for debugging
         if bookRestoreFiles.count > 0 {
-            ApplyLogger.shared.log("[PasscodeTheme] Applying theme '\(theme.name)' with \(bookRestoreFiles.count) files to Passcode - \(theme.telephonyVersion.rawValue)")
+            ApplyLogger.shared.log("[PasscodeTheme] Applying theme '\(theme.name)' with \(bookRestoreFiles.count) files to Passcode - \(globalTelephony.rawValue)")
         }
         
         // Apply using BookRestoreApplyTask

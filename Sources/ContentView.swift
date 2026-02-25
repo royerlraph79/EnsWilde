@@ -27,6 +27,10 @@ struct ContentView: View {
     @State private var path = NavigationPath()
     @State private var showUUIDAlert = false
     
+    // Pairing file replacement confirmation
+    @State private var showPairingReplaceConfirm = false
+    @State private var pendingPairingFileText: String?
+    
     // Binding for external control of apply sheet (default to internal state)
     var showApplySheetBinding: Binding<Bool>? = nil
     var showStatusSheetBinding: Binding<Bool>? = nil
@@ -37,6 +41,8 @@ struct ContentView: View {
     // Optional bindings to track navigation state
     var isInNestedViewBinding: Binding<Bool>?
     var isSystemReadyBinding: Binding<Bool>?
+    var heartbeatRunningBinding: Binding<Bool>?
+    var ddiMountedBinding: Binding<Bool>?
     
     // Internal state for when used standalone
     @State private var _isInNestedView = false
@@ -65,11 +71,12 @@ struct ContentView: View {
         pairingFile != nil && heartbeatRunning && ddiMounted
     }
 
-    // Tools
-    @StateObject private var toolStore = ToolStore()
-    @StateObject private var toolRunner = ToolRunner()
-    @StateObject private var walletStore = AppleWalletStore()
-    @StateObject private var themeStore = PasscodeThemeStore()
+    // Tools (shared from MainViewWithNavigation)
+    @ObservedObject var toolStore: ToolStore
+    @ObservedObject var toolRunner: ToolRunner
+    @ObservedObject var walletStore: AppleWalletStore
+    @ObservedObject var themeStore: PasscodeThemeStore
+    @ObservedObject var featureFlagsStore: FeatureFlagsStore
 
     // Update check
     private let versionJSONURL = URL(string: "https://raw.githubusercontent.com/YangJiiii/EnsWilde/refs/heads/main/version.json")!
@@ -83,488 +90,58 @@ struct ContentView: View {
     // Network monitoring for VPN auto-refresh
     @State private var networkMonitor: NWPathMonitor?
     
+    // Auto-reset pairing file when not ready
+    @State private var pairingResetTimer: DispatchWorkItem?
+    @State private var pairingResetAttempted = false
+    
+    // DDI monitoring and auto-remount
+    @State private var ddiMonitorTimer: Timer?
+    @State private var lastKnownDDIMountState = false
+    @State private var ddiMountRetryCount = 0
+    @State private var lastDDIMountAttempt: Date?
+    
     // Animation Config (Hiệu ứng trượt mượt mà)
     private let panelAnimation: Animation = .spring(response: 0.4, dampingFraction: 0.8, blendDuration: 0)
     
     // Custom initializer to accept optional bindings
     init(
+        themeStore: PasscodeThemeStore,
+        toolStore: ToolStore,
+        toolRunner: ToolRunner,
+        walletStore: AppleWalletStore,
+        featureFlagsStore: FeatureFlagsStore,
         showApplySheetBinding: Binding<Bool>? = nil,
         showStatusSheetBinding: Binding<Bool>? = nil,
         hideBottomApplyButton: Bool = false,
         isInNestedViewBinding: Binding<Bool>? = nil,
-        isSystemReadyBinding: Binding<Bool>? = nil
+        isSystemReadyBinding: Binding<Bool>? = nil,
+        heartbeatRunningBinding: Binding<Bool>? = nil,
+        ddiMountedBinding: Binding<Bool>? = nil
     ) {
+        self.themeStore = themeStore
+        self.toolStore = toolStore
+        self.toolRunner = toolRunner
+        self.walletStore = walletStore
+        self.featureFlagsStore = featureFlagsStore
         self.showApplySheetBinding = showApplySheetBinding
         self.showStatusSheetBinding = showStatusSheetBinding
         self.hideBottomApplyButton = hideBottomApplyButton
         self.isInNestedViewBinding = isInNestedViewBinding
         self.isSystemReadyBinding = isSystemReadyBinding
+        self.heartbeatRunningBinding = heartbeatRunningBinding
+        self.ddiMountedBinding = ddiMountedBinding
     }
 
     var body: some View {
         NavigationStack(path: $path) {
-            ZStack {
-                // Background
-                AppTheme.bg.ignoresSafeArea()
-
-                ScrollView {
-                    VStack(spacing: 8) {
-                        // Header
-                        HStack {
-                            VStack(alignment: .leading, spacing: 0) {
-                                AppTitleHeader()
-                            }
-                            Spacer()
-
-                            // Settings -> PUSH (không sheet)
-                            Button {
-                                path.append("Settings")
-                            } label: {
-                                Image(systemName: "gearshape.fill")
-                                    .font(.system(size: 24))
-                                    .foregroundStyle(Color.white.opacity(0.8))
-                            }
-                            .padding(.trailing, 20)
-                            .padding(.top, 10)
-                        }
-
-                        // --- Section: STATUS ---
-                        AppSectionHeader(title: L("section_status"))
-
-                        Button {
-                            withAnimation(panelAnimation) { statusSheet.wrappedValue = true }
-                        } label: {
-                            CardRow(
-                                title: L("system_status"),
-                                subtitle: _isSystemReady ? L("system_status_ready") : L("system_status_not_ready"),
-                                ok: _isSystemReady,
-                                showChevron: true,
-                                trailing: nil
-                            )
-                        }
-                        .padding(.horizontal, 20)
-
-                        // Error Indicators
-                        if pairingFile == nil {
-                            Button(action: { showPairingFileImporter = true }) {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.system(size: 18, weight: .semibold))
-                                        .foregroundStyle(.orange)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(L("pairing_file_missing"))
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: 17, weight: .medium, design: .rounded))
-                                        Text(L("pairing_file_import_prompt"))
-                                            .foregroundStyle(AppTheme.textSecondary)
-                                            .font(.system(size: 13, weight: .regular, design: .rounded))
-                                    }
-                                    Spacer()
-                                }
-                                .padding(18)
-                                .background(AppTheme.row)
-                                .cornerRadius(16)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 20)
-                        }
-
-                        if !heartbeatRunning && pairingFile != nil {
-                            HStack(spacing: 12) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(.orange)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(L("heartbeat_not_running"))
-                                        .foregroundStyle(.white)
-                                        .font(.system(size: 17, weight: .medium, design: .rounded))
-                                    Text(L("heartbeat_enable_vpn"))
-                                        .foregroundStyle(AppTheme.textSecondary)
-                                        .font(.system(size: 13, weight: .regular, design: .rounded))
-                                }
-                                Spacer()
-                            }
-                            .padding(18)
-                            .background(AppTheme.row)
-                            .cornerRadius(16)
-                            .padding(.horizontal, 20)
-                        }
-
-                        if !ddiMounted && pairingFile != nil && heartbeatRunning {
-                            HStack(spacing: 12) {
-                                Image(systemName: "info.circle.fill")
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundStyle(.blue)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(L("ddi_not_mounted"))
-                                        .foregroundStyle(.white)
-                                        .font(.system(size: 17, weight: .medium, design: .rounded))
-                                    Text(L("ddi_auto_mount_attempt"))
-                                        .foregroundStyle(AppTheme.textSecondary)
-                                        .font(.system(size: 13, weight: .regular, design: .rounded))
-                                }
-                                Spacer()
-                            }
-                            .padding(18)
-                            .background(AppTheme.row)
-                            .cornerRadius(16)
-                            .padding(.horizontal, 20)
-                        }
-
-                        // --- Section: TWEAKS ---
-                        AppSectionHeader(title: L("section_tweaks"))
-
-                        VStack(spacing: 0) {
-                            NavigationLink(value: "MobileGestalt") {
-                                HStack(spacing: 12) {
-                                    if let ok = (toolStore.replaceMobileGestaltEnabled ? true : nil) {
-                                        Image(systemName: ok ? "checkmark.seal.fill" : "xmark.seal.fill")
-                                            .font(.system(size: 18, weight: .semibold))
-                                            .foregroundStyle(ok ? .green : Color.white.opacity(0.55))
-                                    } else {
-                                        Image(systemName: "circle.fill")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(Color.white.opacity(0.20))
-                                            .padding(.horizontal, 4)
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(L("tool_mobile_gestalt"))
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: 17, weight: .medium, design: .rounded))
-                                        Text(L("tool_mobile_gestalt_desc"))
-                                            .foregroundStyle(AppTheme.textSecondary)
-                                            .font(.system(size: 13, weight: .regular, design: .rounded))
-                                            .lineLimit(2)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(Color.white.opacity(0.55))
-                                        .font(.system(size: 14, weight: .semibold))
-                                }
-                                .padding(18)
-                                .background(AppTheme.row)
-                            }
-                            .buttonStyle(.plain)
-
-                            Divider().background(Color.white.opacity(0.1))
-
-                            NavigationLink(value: "DisableSound") {
-                                HStack(spacing: 12) {
-                                    if let ok = (toolStore.disableSoundEnabled ? true : nil) {
-                                        Image(systemName: ok ? "checkmark.seal.fill" : "xmark.seal.fill")
-                                            .font(.system(size: 18, weight: .semibold))
-                                            .foregroundStyle(ok ? .green : Color.white.opacity(0.55))
-                                    } else {
-                                        Image(systemName: "circle.fill")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(Color.white.opacity(0.20))
-                                            .padding(.horizontal, 4)
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(L("tool_disable_sound"))
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: 17, weight: .medium, design: .rounded))
-                                        Text(L("tool_disable_sound_desc"))
-                                            .foregroundStyle(AppTheme.textSecondary)
-                                            .font(.system(size: 13, weight: .regular, design: .rounded))
-                                            .lineLimit(2)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(Color.white.opacity(0.55))
-                                        .font(.system(size: 14, weight: .semibold))
-                                }
-                                .padding(18)
-                                .background(AppTheme.row)
-                            }
-                            .buttonStyle(.plain)
-
-                            Divider().background(Color.white.opacity(0.1))
-
-                            NavigationLink(value: "AppleWallet") {
-                                HStack(spacing: 12) {
-                                    if let ok = (walletStore.appleWalletEnabled ? true : nil) {
-                                        Image(systemName: ok ? "checkmark.seal.fill" : "xmark.seal.fill")
-                                            .font(.system(size: 18, weight: .semibold))
-                                            .foregroundStyle(ok ? .green : Color.white.opacity(0.55))
-                                    } else {
-                                        Image(systemName: "circle.fill")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(Color.white.opacity(0.20))
-                                            .padding(.horizontal, 4)
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(L("tool_apple_wallet"))
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: 17, weight: .medium, design: .rounded))
-                                        Text(L("tool_apple_wallet_desc"))
-                                            .foregroundStyle(AppTheme.textSecondary)
-                                            .font(.system(size: 13, weight: .regular, design: .rounded))
-                                            .lineLimit(2)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(Color.white.opacity(0.55))
-                                        .font(.system(size: 14, weight: .semibold))
-                                }
-                                .padding(18)
-                                .background(AppTheme.row)
-                            }
-                            .buttonStyle(.plain)
-
-                            Divider().background(Color.white.opacity(0.1))
-
-                            NavigationLink(value: "PasscodeTheme") {
-                                HStack(spacing: 12) {
-                                    if let ok = (themeStore.passcodeThemeEnabled ? true : nil) {
-                                        Image(systemName: ok ? "checkmark.seal.fill" : "xmark.seal.fill")
-                                            .font(.system(size: 18, weight: .semibold))
-                                            .foregroundStyle(ok ? .green : Color.white.opacity(0.55))
-                                    } else {
-                                        Image(systemName: "circle.fill")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(Color.white.opacity(0.20))
-                                            .padding(.horizontal, 4)
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(L("tool_passcode_theme"))
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: 17, weight: .medium, design: .rounded))
-                                        Text(L("tool_passcode_theme_desc"))
-                                            .foregroundStyle(AppTheme.textSecondary)
-                                            .font(.system(size: 13, weight: .regular, design: .rounded))
-                                            .lineLimit(2)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(Color.white.opacity(0.55))
-                                        .font(.system(size: 14, weight: .semibold))
-                                }
-                                .padding(18)
-                                .background(AppTheme.row)
-                            }
-                            .buttonStyle(.plain)
-
-                            Divider().background(Color.white.opacity(0.1))
-
-                            NavigationLink(value: "ThemesUI") {
-                                HStack(spacing: 12) {
-                                    if let ok = (toolStore.themesUIEnabled ? true : nil) {
-                                        Image(systemName: ok ? "checkmark.seal.fill" : "xmark.seal.fill")
-                                            .font(.system(size: 18, weight: .semibold))
-                                            .foregroundStyle(ok ? .green : Color.white.opacity(0.55))
-                                    } else {
-                                        Image(systemName: "circle.fill")
-                                            .font(.system(size: 10, weight: .semibold))
-                                            .foregroundStyle(Color.white.opacity(0.20))
-                                            .padding(.horizontal, 4)
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(L("tool_themes_ui"))
-                                            .foregroundStyle(.white)
-                                            .font(.system(size: 17, weight: .medium, design: .rounded))
-                                        Text(L("tool_themes_ui_desc"))
-                                            .foregroundStyle(AppTheme.textSecondary)
-                                            .font(.system(size: 13, weight: .regular, design: .rounded))
-                                            .lineLimit(2)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(Color.white.opacity(0.55))
-                                        .font(.system(size: 14, weight: .semibold))
-                                }
-                                .padding(18)
-                                .background(AppTheme.row)
-                            }
-                            .buttonStyle(.plain)
-
-                            // zPatch Custom (only show if unlocked)
-                            if toolStore.zPatchUnlocked {
-                                Divider().background(Color.white.opacity(0.1))
-                                
-                                NavigationLink(value: "zPatchCustom") {
-                                    HStack(spacing: 12) {
-                                        if let ok = (toolStore.zPatchCustomEnabled ? true : nil) {
-                                            Image(systemName: ok ? "checkmark.seal.fill" : "xmark.seal.fill")
-                                                .font(.system(size: 18, weight: .semibold))
-                                                .foregroundStyle(ok ? .green : Color.white.opacity(0.55))
-                                        } else {
-                                            Image(systemName: "circle.fill")
-                                                .font(.system(size: 10, weight: .semibold))
-                                                .foregroundStyle(Color.white.opacity(0.20))
-                                                .padding(.horizontal, 4)
-                                        }
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(L("tool_zpatch_custom"))
-                                                .foregroundStyle(.white)
-                                                .font(.system(size: 17, weight: .medium, design: .rounded))
-                                            Text(L("tool_zpatch_custom_desc"))
-                                                .foregroundStyle(AppTheme.textSecondary)
-                                                .font(.system(size: 13, weight: .regular, design: .rounded))
-                                                .lineLimit(2)
-                                        }
-                                        Spacer()
-                                        Image(systemName: "chevron.right")
-                                            .foregroundStyle(Color.white.opacity(0.55))
-                                            .font(.system(size: 14, weight: .semibold))
-                                    }
-                                    .padding(18)
-                                    .background(AppTheme.row)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .background(AppTheme.row)
-                        .cornerRadius(16)
-                        .padding(.horizontal, 20)
-
-                        // Footer
-                        VStack(spacing: 8) {
-                            Text(appVersionFooter)
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                            Text("Built With By YangJiii")
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                        }
-                        .padding(.top, 20)
-                        .padding(.bottom, 20)
-
-                        Spacer(minLength: 160)
-                    }
-                    .padding(.top, 6)
-                }
-
-                // --- APPLY BUTTON PANEL (Panel Style) ---
-                if !hideBottomApplyButton {
-                    VStack {
-                        Spacer()
-                        VStack(spacing: 0) {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Color.white.opacity(0.3))
-                                .frame(width: 40, height: 5)
-                                .padding(.vertical, 16)
-                            
-                            WalletStyleButton(title: L("apply_button"), isLoading: false, disabled: !_isSystemReady) {
-                                withAnimation(panelAnimation) { showApplySheet.wrappedValue = true }
-                            }
-                            .padding(.horizontal, 20)
-                            .padding(.bottom, 20)
-                        }
-                        .background(AppTheme.bg.padding(.bottom, -100).ignoresSafeArea())
-                        .clipShape(RoundedCorner(radius: 24, corners: [.topLeft, .topRight]))
-                        .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: -5)
-                    }
-                    .ignoresSafeArea(edges: .bottom)
-                    .zIndex(5)
-                }
-                
-                // --- CUSTOM SHEETS OVERLAY ---
-                // Lưu ý: Đặt cuối ZStack để đè lên mọi thứ
-                
-                // 1. STATUS SHEET
-                if statusSheet.wrappedValue {
-                    // Lớp nền tối (Fade)
-                    Color.black.opacity(0.3)
-                        .background(.ultraThinMaterial)
-                        .ignoresSafeArea()
-                        .zIndex(10) // Đảm bảo nằm trên nội dung chính
-                        .transition(.opacity)
-                        .onTapGesture { withAnimation(panelAnimation) { statusSheet.wrappedValue = false } }
-                    
-                    // Panel nội dung (Slide up)
-                    VStack {
-                        Spacer() // Đẩy sheet xuống đáy
-                        StatusSheet(
-                            pairingFileLoaded: .constant(pairingFile != nil),
-                            heartbeatRunning: $heartbeatRunning,
-                            ddiMounted: $ddiMounted,
-                            onImportPairing: { showPairingFileImporter = true },
-                            onResetPairing: { resetPairing() },
-                            onMountDDI: {
-                                // Trigger manual DDI mount
-                                attemptAutoMountDDI()
-                            },
-                            onClose: { withAnimation(panelAnimation) { statusSheet.wrappedValue = false } }
-                        )
-                    }
-                    .ignoresSafeArea(edges: .bottom) // Để trượt từ mép màn hình vật lý
-                    .zIndex(11) // Nằm trên lớp nền
-                    .transition(.move(edge: .bottom)) // Hiệu ứng trượt chuẩn
-                }
-
-                // 2. APPLY SHEET
-                if showApplySheet.wrappedValue {
-                    // Lớp nền tối (Fade)
-                    Color.black.opacity(0.3)
-                        .background(.ultraThinMaterial)
-                        .ignoresSafeArea()
-                        .zIndex(20)
-                        .transition(.opacity)
-                        .onTapGesture { withAnimation(panelAnimation) { showApplySheet.wrappedValue = false } }
-                    
-                    // Panel nội dung (Slide up)
-                    VStack {
-                        Spacer()
-                        ApplySheet(
-                            logs: .constant(toolRunner.logs.map { $0.text }),
-                            isRunning: .constant(isApplyRunning(toolRunner.state)),
-                            progressText: .constant(applyStatusText(toolRunner.state)),
-                            enableRespring: $toolStore.soundRespringEnabled,
-                            bookassetdUUID: .constant(toolStore.bookassetdUUID ?? ""),
-                            onApply: {
-                                Task {
-                                    if toolStore.bookassetdUUID == nil || toolStore.bookassetdUUID?.isEmpty == true {
-                                        showUUIDAlert = true
-                                        return
-                                    }
-                                    
-                                    await toolRunner.applyAll(isSystemReady: _isSystemReady, store: toolStore, walletStore: walletStore, themeStore: themeStore)
-                                    
-                                    if case .success = toolRunner.state {
-                                        try? await Task.sleep(nanoseconds: 8_000_000_000) // 8 seconds delay before respring
-                                        
-                                        if toolStore.soundRespringEnabled {
-                                            try? respringNow()
-                                        } else {
-                                            if let bundleID = Bundle.main.bundleIdentifier {
-                                                LSApplicationWorkspaceDefaultWorkspace().openApplication(withBundleID: bundleID)
-                                            }
-                                        }
-                                    }
-                                    
-                                    if case .failed(let message) = toolRunner.state {
-                                        lastError = message
-                                        showErrorAlert = true
-                                    }
-                                }
-                            },
-                            onClearUUID: { toolStore.bookassetdUUID = nil },
-                            onClose: { withAnimation(panelAnimation) { showApplySheet.wrappedValue = false } }
-                        )
-                    }
-                    .ignoresSafeArea(edges: .bottom)
-                    .zIndex(21)
-                    .transition(.move(edge: .bottom))
-                }
-
-            } // ZStack End
+            Form {
+                statusSection
+                tweaksSection
+            }
+            .headerProminence(.increased)
+            .navigationTitle("EnsWilde")
             .navigationDestination(for: String.self) { route in
-                if route == "DisableSound" {
-                    DisableSoundView()
-                } else if route == "MobileGestalt" {
-                    MobileGestaltView(toolStore: toolStore)
-                } else if route == "AppleWallet" {
-                    AppleWalletView(walletStore: walletStore)
-                } else if route == "PasscodeTheme" {
-                    PasscodeThemeView(themeStore: themeStore)
-                } else if route == "ThemesUI" {
-                    ThemesUIView(toolStore: toolStore)
-                } else if route == "zPatchCustom" {
-                    zPatchCustomView()
-                } else if route == "Settings" {
-                    SettingsView()
-                }
+                destinationView(for: route)
             }
         } // NavigationStack End
         .onChange(of: path) { newPath in
@@ -573,13 +150,29 @@ struct ContentView: View {
         .onChange(of: _isSystemReady) { newValue in
             isSystemReady.wrappedValue = newValue
         }
+        .onChange(of: heartbeatRunning) { newValue in
+            heartbeatRunningBinding?.wrappedValue = newValue
+        }
+        .onChange(of: ddiMounted) { newValue in
+            ddiMountedBinding?.wrappedValue = newValue
+        }
         .onAppear {
             isSystemReady.wrappedValue = _isSystemReady
+            heartbeatRunningBinding?.wrappedValue = heartbeatRunning
+            ddiMountedBinding?.wrappedValue = ddiMounted
         }
-        .preferredColorScheme(.dark)
+        .sheet(isPresented: statusSheet) {
+            statusSheetContent
+        }
+        .sheet(isPresented: showApplySheet) {
+            applySheetContent
+        }
         .fileImporter(
             isPresented: $showPairingFileImporter,
-            allowedContentTypes: [UTType(filenameExtension: "mobiledevicepairing", conformingTo: .data)!],
+            allowedContentTypes: [
+                .propertyList,
+                UTType(filenameExtension: "mobiledevicepairing", conformingTo: .data)!
+            ],
             onCompletion: handleFileImport
         )
         .alert("System Message", isPresented: $showErrorAlert) {
@@ -598,57 +191,28 @@ struct ContentView: View {
         .alert("UUID Required", isPresented: $showUUIDAlert) {
             Button("Cancel", role: .cancel) { }
             Button("OK") {
-                LSApplicationWorkspaceDefaultWorkspace().openApplication(withBundleID: "com.apple.iBooks")
-                
-                Task {
-                    do {
-                        let uuid = try await BookassetdUUIDHelper.captureUUID(
-                            timeout: 120,
-                            openBooksFirst: false,
-                            returnToAppAfterCapture: true
-                        )
-                        toolStore.bookassetdUUID = uuid
-                        
-                        DispatchQueue.main.async {
-                            lastError = "UUID captured successfully! Auto-applying tweaks..."
-                            showErrorAlert = true
-                            
-                            // Fix #3: Auto-apply after UUID fetch success
-                            Task {
-                                try? await Task.sleep(nanoseconds: 1_000_000_000) // Wait 1 second for user to see success message
-                                
-                                await self.toolRunner.applyAll(isSystemReady: self._isSystemReady, store: self.toolStore, walletStore: self.walletStore, themeStore: self.themeStore)
-                                
-                                if case .success = self.toolRunner.state {
-                                    try? await Task.sleep(nanoseconds: 8_000_000_000) // 8 seconds delay before respring
-                                    
-                                    if self.toolStore.soundRespringEnabled {
-                                        try? self.respringNow()
-                                    } else {
-                                        if let bundleID = Bundle.main.bundleIdentifier {
-                                            LSApplicationWorkspaceDefaultWorkspace().openApplication(withBundleID: bundleID)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } catch {
-                        DispatchQueue.main.async {
-                            lastError = "Failed to capture UUID: \(error.localizedDescription)"
-                            showErrorAlert = true
-                        }
-                    }
-                }
+                handleUUIDCapture()
             }
         } message: {
             Text("Please open Books app and download a book to capture UUID. The app will automatically return and apply tweaks.")
         }
+        .alert("Replace Existing Pairing File?", isPresented: $showPairingReplaceConfirm) {
+            Button("Cancel", role: .cancel) {
+                pendingPairingFileText = nil
+            }
+            Button("Replace", role: .destructive) {
+                if let text = pendingPairingFileText {
+                    importPairingFile(text)
+                }
+                pendingPairingFileText = nil
+            }
+        } message: {
+            Text("You already have a pairing file loaded. Do you want to replace it with the new one? This will restart the connection.")
+        }
         .onAppear {
             runStartupChecksOnce()
             checkForUpdate()
-            // Refresh system status (VPN, DDI, heartbeat)
             refreshSystemStatus()
-            // Start network monitoring for VPN auto-refresh
             startNetworkMonitoring()
         }
         .onChange(of: scenePhase) {
@@ -656,17 +220,324 @@ struct ContentView: View {
             if scenePhase == .active {
                 autoLoadSideStorePairingIfNeeded()
                 checkForUpdate()
-                // Refresh system status when app becomes active
                 refreshSystemStatus()
+                if pairingFile != nil && !_isSystemReady {
+                    startPairingResetTimer()
+                }
             } else if scenePhase == .background {
-                // Keep network monitor running in background
+                cancelPairingResetTimer()
+            }
+        }
+        .onChange(of: heartbeatRunning) {
+            if heartbeatRunning {
+                print("[Auto-Reset] Heartbeat running, canceling timer")
+                cancelPairingResetTimer()
+            }
+        }
+        .onChange(of: _isSystemReady) {
+            if _isSystemReady {
+                print("[Auto-Reset] System ready, canceling timer")
+                cancelPairingResetTimer()
+                pairingResetAttempted = false
+            } else if pairingFile != nil {
+                startPairingResetTimer()
+            }
+        }
+        .onChange(of: pairingFile) {
+            pairingResetAttempted = false
+            if pairingFile == nil {
+                cancelPairingResetTimer()
             }
         }
         .onDisappear {
-            // Stop network monitoring when view disappears
             stopNetworkMonitoring()
+            stopDDIMonitoring()
+            cancelPairingResetTimer()
         }
     } // Body End
+
+    // MARK: - Body Sections
+
+    @ViewBuilder
+    private var statusSection: some View {
+        Section(header: Text(L("section_status"))) {
+            CardRow(
+                title: L("system_status"),
+                subtitle: _isSystemReady ? L("system_status_ready") : L("system_status_not_ready"),
+                ok: _isSystemReady,
+                showChevron: false,
+                trailing: nil
+            )
+
+            if pairingFile == nil {
+                Button(action: { showPairingFileImporter = true }) {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L("pairing_file_missing"))
+                            Text(L("pairing_file_import_prompt"))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+            }
+
+            if !heartbeatRunning && pairingFile != nil {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L("heartbeat_not_running"))
+                        Text(L("heartbeat_enable_vpn"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+
+            if !ddiMounted && pairingFile != nil && heartbeatRunning {
+                ddiStatusLabel
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var ddiStatusLabel: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("ddi_not_mounted"))
+                if ddiMountRetryCount >= 5 {
+                    Text("Max auto-mount attempts reached. Tap status bar to retry manually.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if ddiMountRetryCount > 0 {
+                    Text("Auto-mounting DDI... (Attempt \(ddiMountRetryCount)/5)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(L("ddi_auto_mount_attempt"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } icon: {
+            Image(systemName: ddiMountRetryCount >= 5 ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    @ViewBuilder
+    private var tweaksSection: some View {
+        Section(header: Text(L("section_tweaks"))) {
+            toolNavigationLink(
+                value: "MobileGestalt",
+                title: L("tool_mobile_gestalt"),
+                subtitle: L("tool_mobile_gestalt_desc"),
+                icon: "cpu",
+                isEnabled: toolStore.replaceMobileGestaltEnabled
+            )
+
+            toolNavigationLink(
+                value: "ThemesUI",
+                title: L("tool_themes_ui"),
+                subtitle: L("tool_themes_ui_desc"),
+                icon: "paintbrush",
+                isEnabled: toolStore.themesUIEnabled
+            )
+
+            toolNavigationLink(
+                value: "PasscodeTheme",
+                title: L("tool_passcode_theme"),
+                subtitle: L("tool_passcode_theme_desc"),
+                icon: "lock.rectangle",
+                isEnabled: themeStore.passcodeThemeEnabled
+            )
+
+            toolNavigationLink(
+                value: "DisableSound",
+                title: L("tool_disable_sound"),
+                subtitle: L("tool_disable_sound_desc"),
+                icon: "speaker.slash",
+                isEnabled: toolStore.disableSoundEnabled
+            )
+
+            toolNavigationLink(
+                value: "AppleWallet",
+                title: L("tool_apple_wallet"),
+                subtitle: L("tool_apple_wallet_desc"),
+                icon: "wallet.pass",
+                isEnabled: walletStore.appleWalletEnabled
+            )
+
+            toolNavigationLink(
+                value: "FeatureFlags",
+                title: L("tool_feature_flags"),
+                subtitle: L("tool_feature_flags_desc"),
+                icon: "flag",
+                isEnabled: featureFlagsStore.featureFlagsEnabled
+            )
+
+            toolNavigationLink(
+                value: "zPatchCustom",
+                title: L("tool_zpatch_custom"),
+                subtitle: L("tool_zpatch_custom_desc"),
+                icon: "wrench.and.screwdriver",
+                isEnabled: toolStore.zPatchCustomEnabled
+            )
+        }
+    }
+
+    // MARK: - Navigation Destination
+
+    @ViewBuilder
+    private func destinationView(for route: String) -> some View {
+        if route == "DisableSound" {
+            DisableSoundView()
+        } else if route == "MobileGestalt" {
+            MobileGestaltView(toolStore: toolStore)
+        } else if route == "AppleWallet" {
+            AppleWalletView(walletStore: walletStore)
+        } else if route == "PasscodeTheme" {
+            PasscodeThemeView(themeStore: themeStore)
+        } else if route == "ThemesUI" {
+            ThemesUIView(toolStore: toolStore)
+        } else if route == "zPatchCustom" {
+            zPatchCustomView()
+        } else if route == "FeatureFlags" {
+            FeatureFlagsView(store: featureFlagsStore)
+        }
+    }
+
+    // MARK: - Sheet Contents
+
+    private var statusSheetContent: some View {
+        StatusSheet(
+            pairingFileLoaded: .constant(pairingFile != nil),
+            heartbeatRunning: $heartbeatRunning,
+            ddiMounted: $ddiMounted,
+            onImportPairing: { showPairingFileImporter = true },
+            onResetPairing: { resetPairing() },
+            onMountDDI: { attemptAutoMountDDI() },
+            onClose: { statusSheet.wrappedValue = false }
+        )
+        .presentationDetents([.medium, .large])
+    }
+
+    private var applySheetContent: some View {
+        ApplySheet(
+            logs: .constant(toolRunner.logs.map { $0.text }),
+            isRunning: .constant(isApplyRunning(toolRunner.state)),
+            progressText: .constant(applyStatusText(toolRunner.state)),
+            enableRespring: $toolStore.soundRespringEnabled,
+            bookassetdUUID: .constant(toolStore.bookassetdUUID ?? ""),
+            onApply: {
+                Task {
+                    if toolStore.bookassetdUUID == nil || toolStore.bookassetdUUID?.isEmpty == true {
+                        showUUIDAlert = true
+                        return
+                    }
+                    
+                    await toolRunner.applyAll(isSystemReady: _isSystemReady, store: toolStore, walletStore: walletStore, themeStore: themeStore, featureFlagsStore: featureFlagsStore)
+                    
+                    if case .success = toolRunner.state {
+                        try? await Task.sleep(nanoseconds: 8_000_000_000)
+                        
+                        if toolStore.soundRespringEnabled {
+                            try? respringNow()
+                        } else {
+                            if let bundleID = Bundle.main.bundleIdentifier {
+                                LSApplicationWorkspaceDefaultWorkspace().openApplication(withBundleID: bundleID)
+                            }
+                        }
+                    }
+                    
+                    if case .failed(let message) = toolRunner.state {
+                        lastError = message
+                        showErrorAlert = true
+                    }
+                }
+            },
+            onClearUUID: { toolStore.bookassetdUUID = nil },
+            onClose: { showApplySheet.wrappedValue = false }
+        )
+        .presentationDetents([.large])
+    }
+
+    // MARK: - UUID Capture
+
+    private func handleUUIDCapture() {
+        LSApplicationWorkspaceDefaultWorkspace().openApplication(withBundleID: "com.apple.iBooks")
+        
+        Task {
+            do {
+                let uuid = try await BookassetdUUIDHelper.captureUUID(
+                    timeout: 120,
+                    openBooksFirst: false,
+                    returnToAppAfterCapture: true
+                )
+                toolStore.bookassetdUUID = uuid
+                
+                DispatchQueue.main.async {
+                    lastError = "UUID captured successfully! Auto-applying tweaks..."
+                    showErrorAlert = true
+                    
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        
+                        await self.toolRunner.applyAll(isSystemReady: self._isSystemReady, store: self.toolStore, walletStore: self.walletStore, themeStore: self.themeStore, featureFlagsStore: self.featureFlagsStore)
+                        
+                        if case .success = self.toolRunner.state {
+                            try? await Task.sleep(nanoseconds: 8_000_000_000)
+                            
+                            if self.toolStore.soundRespringEnabled {
+                                try? self.respringNow()
+                            } else {
+                                if let bundleID = Bundle.main.bundleIdentifier {
+                                    LSApplicationWorkspaceDefaultWorkspace().openApplication(withBundleID: bundleID)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    lastError = "Failed to capture UUID: \(error.localizedDescription)"
+                    showErrorAlert = true
+                }
+            }
+        }
+    }
+
+    // MARK: - Tool Navigation Link (Feather-style)
+
+    @ViewBuilder
+    private func toolNavigationLink(value: String, title: String, subtitle: String, icon: String, isEnabled: Bool) -> some View {
+        NavigationLink(value: value) {
+            HStack {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                } icon: {
+                    Image(systemName: icon)
+                }
+                Spacer()
+                if isEnabled {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                }
+            }
+        }
+    }
 
     // MARK: - Logic Functions
 
@@ -755,9 +626,12 @@ struct ContentView: View {
         if pairingFile != nil {
             ddiMounted = computeDDIMounted()
             startHeartbeatOnce()
+            // Start auto-reset timer if system not ready
+            startPairingResetTimer()
         } else {
             heartbeatRunning = false
             ddiMounted = false
+            cancelPairingResetTimer()
         }
     }
 
@@ -787,14 +661,20 @@ struct ContentView: View {
                     return
                 }
                 
-                // Validate pairing file before saving
+                // Validate pairing file before proceeding
                 do {
                     let _ = try PairingFileParser.parseUDID(fromPlistText: text)
                     // If we get here, the pairing file is valid
-                    pairingFile = text
-                    savePairingFileToDocuments(text)
-                    ddiMounted = computeDDIMounted()
-                    startHeartbeatOnce()
+                    
+                    // Check if user already has a pairing file loaded
+                    if pairingFile != nil {
+                        // Show confirmation dialog before replacing
+                        pendingPairingFileText = text
+                        showPairingReplaceConfirm = true
+                    } else {
+                        // No existing pairing file, import directly
+                        importPairingFile(text)
+                    }
                 } catch {
                     // Pairing file is invalid
                     lastError = "Invalid pairing file: \(error.localizedDescription)"
@@ -808,6 +688,14 @@ struct ContentView: View {
             lastError = error.localizedDescription
             showErrorAlert = true
         }
+    }
+    
+    /// Import and activate a pairing file
+    private func importPairingFile(_ text: String) {
+        pairingFile = text
+        savePairingFileToDocuments(text)
+        ddiMounted = computeDDIMounted()
+        startHeartbeatOnce()
     }
 
     private func autoLoadSideStorePairingIfNeeded() {
@@ -855,6 +743,55 @@ struct ContentView: View {
         }
         heartbeatRunning = false
         ddiMounted = false
+        
+        // Stop DDI monitoring
+        stopDDIMonitoring()
+        
+        // Reset DDI state
+        lastKnownDDIMountState = false
+        ddiMountRetryCount = 0
+        lastDDIMountAttempt = nil
+    }
+    
+    /// Start timer to auto-reset pairing file if system not ready after 3 seconds
+    private func startPairingResetTimer() {
+        // Cancel any existing timer
+        cancelPairingResetTimer()
+        
+        // Only start timer if:
+        // 1. Pairing file exists
+        // 2. System is not ready
+        // 3. Haven't already attempted reset for this pairing file
+        guard pairingFile != nil && !_isSystemReady && !pairingResetAttempted else {
+            return
+        }
+        
+        print("[Auto-Reset] Starting 3-second timer for pairing validation")
+        
+        let workItem = DispatchWorkItem {
+            // Double-check conditions before resetting
+            if self.pairingFile != nil && !self._isSystemReady {
+                print("[Auto-Reset] System not ready after 3 seconds, resetting pairing file")
+                
+                DispatchQueue.main.async {
+                    self.pairingResetAttempted = true
+                    self.resetPairing()
+                    
+                    // Show error alert
+                    self.lastError = "Pairing file is invalid or LocalDev VPN is not enabled. Please check:\n- SideStore LocalDevVPN or StikDebug is running\n- VPN connection is active\n- Pairing file is valid\nThen import a new pairing file."
+                    self.showErrorAlert = true
+                }
+            }
+        }
+        
+        pairingResetTimer = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: workItem)
+    }
+    
+    /// Cancel the auto-reset timer
+    private func cancelPairingResetTimer() {
+        pairingResetTimer?.cancel()
+        pairingResetTimer = nil
     }
 
     private func computeDDIMounted() -> Bool {
@@ -865,26 +802,39 @@ struct ContentView: View {
     private func startHeartbeatOnce() {
         guard pairingFile != nil else { return }
         DispatchQueue.global(qos: .background).async { [self] in
-            let completionHandler: @convention(block) (Int32, String?) -> Void = { result, _ in
-                if result == 0 {
-                    DispatchQueue.main.async {
+            let completionHandler: @convention(block) (Int32, String?) -> Void = { result, message in
+                DispatchQueue.main.async {
+                    if result == 0 {
                         self.heartbeatRunning = true
                         self.ddiMounted = self.computeDDIMounted()
+                        self.lastKnownDDIMountState = self.ddiMounted
+                        
+                        // Start DDI monitoring
+                        self.startDDIMonitoring()
                         
                         // Auto-mount DDI if not mounted
                         if !self.ddiMounted {
                             self.attemptAutoMountDDI()
                         }
-                    }
-                } else {
-                    DispatchQueue.main.async {
+                    } else {
                         self.heartbeatRunning = false
                         self.ddiMounted = false
-                        if result == -9 {
+                        
+                        // Stop DDI monitoring when heartbeat fails
+                        self.stopDDIMonitoring()
+                        
+                        // Provide specific error messages based on error code
+                        switch result {
+                        case -9:
                             self.resetPairing()
                             self.lastError = "Invalid pairing file. Please select a new one."
-                        } else {
-                            self.lastError = "Heartbeat failed (Error: \(result)). Enable SideStore LocalDevVPN or StikDebug, then close and reopen the app."
+                        case -1:
+                            self.lastError = "Connection failed. Please check:\n- SideStore LocalDevVPN or StikDebug is running\n- VPN connection is active\n- Then close and reopen the app"
+                        case -2:
+                            self.lastError = "No valid tunnel IPs found. Please configure TunnelDeviceIP in settings or ensure VPN is properly set up."
+                        default:
+                            let errorMsg = message ?? "Unknown error"
+                            self.lastError = "Heartbeat failed (Error: \(result)): \(errorMsg)"
                         }
                         self.showErrorAlert = true
                     }
@@ -900,12 +850,23 @@ struct ContentView: View {
                 }
                 return
             }
-            context.startHeartbeat(completionHandler: completionHandler, logger: nil)
+            
+            // Call startHeartbeat with proper error handling
+            context.startHeartbeat(completionHandler: completionHandler, logger: { msg in
+                print("[Heartbeat] \(msg)")
+            })
         }
     }
     
-    private func attemptAutoMountDDI() {
+    private func attemptAutoMountDDI(showErrorAlert: Bool = true) {
         guard let context = JITEnableContext.shared else { return }
+        
+        // If this is a manual attempt (showErrorAlert = true), reset the retry counter
+        if showErrorAlert && ddiMountRetryCount >= 5 {
+            print("[DDI Manual Mount] Resetting stuck retry counter for manual attempt")
+            ddiMountRetryCount = 0
+            lastDDIMountAttempt = nil
+        }
         
         DispatchQueue.global(qos: .userInitiated).async {
             // First check if DDI is already mounted
@@ -914,47 +875,78 @@ struct ContentView: View {
             if currentlyMounted {
                 DispatchQueue.main.async {
                     self.ddiMounted = true
-                    self.lastError = "Developer Disk Image is already mounted."
-                    self.showErrorAlert = true
+                    if showErrorAlert {
+                        self.lastError = "Developer Disk Image is already mounted."
+                        self.showErrorAlert = true
+                    }
                 }
                 return
             }
             
-            // If not mounted, try to mount it
+            // If not mounted, try built-in DDI first
             do {
                 try context.mountDeveloperDiskImage { status in
-                    // Log on background thread to avoid excessive main queue dispatches
                     print("[DDI Auto-Mount] \(status ?? "nil")")
                 }
                 
                 DispatchQueue.main.async {
-                    // If we get here, mount succeeded
                     self.ddiMounted = self.computeDDIMounted()
+                    self.lastKnownDDIMountState = self.ddiMounted
+                    self.ddiMountRetryCount = 0
                     print("[DDI Auto-Mount] Success! DDI is now mounted.")
                     
-                    // Show success message to user
-                    self.lastError = "Developer Disk Image mounted successfully!"
-                    self.showErrorAlert = true
+                    if showErrorAlert {
+                        self.lastError = "Developer Disk Image mounted successfully!"
+                        self.showErrorAlert = true
+                    }
                 }
             } catch let error as NSError {
+                print("[DDI Auto-Mount] Built-in DDI failed: \(error.localizedDescription). Trying personalized DDI...")
+                
+                // Fallback: try personalized DDI if files are downloaded
+                let imagePath = URL.documentsDirectory.appendingPathComponent("DDI/Image.dmg").path
+                let trustcachePath = URL.documentsDirectory.appendingPathComponent("DDI/Image.dmg.trustcache").path
+                let manifestPath = URL.documentsDirectory.appendingPathComponent("DDI/BuildManifest.plist").path
+                let fm = FileManager.default
+                
+                if fm.fileExists(atPath: imagePath) && fm.fileExists(atPath: trustcachePath) && fm.fileExists(atPath: manifestPath) {
+                    do {
+                        try context.mountPersonalDDI(withImagePath: imagePath, trustcachePath: trustcachePath, manifestPath: manifestPath)
+                        
+                        DispatchQueue.main.async {
+                            self.ddiMounted = self.computeDDIMounted()
+                            self.lastKnownDDIMountState = self.ddiMounted
+                            self.ddiMountRetryCount = 0
+                            print("[DDI Auto-Mount] Personalized DDI mounted successfully!")
+                            
+                            if showErrorAlert {
+                                self.lastError = L("ddi_mount_personal_success")
+                                self.showErrorAlert = true
+                            }
+                        }
+                        return
+                    } catch let personalError as NSError {
+                        print("[DDI Auto-Mount] Personalized DDI also failed: \(personalError.localizedDescription)")
+                    }
+                }
+                
                 DispatchQueue.main.async {
                     print("[DDI Auto-Mount] Error: \(error.localizedDescription)")
                     
-                    // Provide more specific guidance based on error
-                    var errorMessage = "Failed to mount DDI: \(error.localizedDescription)"
-                    
-                    // Check if it's the FfinvalidArg error or developer mode not enabled
-                    if error.code == -2 {
-                        errorMessage = "Developer Mode is not enabled. Please enable it in Settings → Privacy & Security → Developer Mode, then restart your device."
-                    } else if error.localizedDescription.contains("FfinvalidArg") || error.localizedDescription.contains("invalidArg") {
-                        // This error typically means Developer Mode isn't properly enabled or device needs restart
-                        errorMessage = "DDI mounting failed. Please ensure:\n\n1. Developer Mode is enabled in Settings → Privacy & Security → Developer Mode\n2. Your device has been restarted after enabling Developer Mode\n3. Your pairing file is valid and up-to-date\n\nIf the issue persists, Developer Disk Image may mount automatically after a device restart."
-                    } else {
-                        errorMessage += "\n\nFor iOS 16+: Enable Developer Mode in Settings → Privacy & Security → Developer Mode (requires restart).\n\nFor iOS 15 and older: You'll need personalized DDI files."
+                    if showErrorAlert {
+                        var errorMessage = "Failed to mount DDI: \(error.localizedDescription)"
+                        
+                        if error.code == -2 {
+                            errorMessage = "Developer Mode is not enabled. Please enable it in Settings → Privacy & Security → Developer Mode, then restart your device."
+                        } else if error.localizedDescription.contains("FfinvalidArg") || error.localizedDescription.contains("invalidArg") {
+                            errorMessage = "DDI mounting failed. This can happen after device reboot.\n\nPlease try:\n1. Go to Settings tab → Download DDI → Mount Personalized DDI\n2. Or enable Developer Mode in Settings → Privacy & Security → Developer Mode\n3. Wait a moment and the app will retry automatically"
+                        } else {
+                            errorMessage += "\n\nTip: Go to Settings tab → Download DDI to download personalized DDI files, then use Mount Personalized DDI."
+                        }
+                        
+                        self.lastError = errorMessage
+                        self.showErrorAlert = true
                     }
-                    
-                    self.lastError = errorMessage
-                    self.showErrorAlert = true
                 }
             }
         }
@@ -964,7 +956,32 @@ struct ContentView: View {
     private func refreshSystemStatus() {
         // Refresh DDI mounted status
         if pairingFile != nil {
-            ddiMounted = computeDDIMounted()
+            let newDDIState = computeDDIMounted()
+            
+            // Check if DDI state changed
+            if newDDIState != ddiMounted {
+                print("[Refresh] DDI state changed: \(ddiMounted) -> \(newDDIState)")
+                ddiMounted = newDDIState
+                lastKnownDDIMountState = newDDIState
+                
+                // If DDI became unmounted, attempt to remount
+                if !newDDIState && heartbeatRunning {
+                    print("[Refresh] DDI unmounted, attempting remount...")
+                    // Reset retry counter on network change/refresh
+                    if ddiMountRetryCount >= 5 {
+                        print("[Refresh] Resetting stuck retry counter (was at max)")
+                        ddiMountRetryCount = 0
+                        lastDDIMountAttempt = nil
+                    }
+                    attemptAutoMountDDIWithRetry()
+                } else if newDDIState {
+                    // DDI mounted successfully - reset counter
+                    ddiMountRetryCount = 0
+                    lastDDIMountAttempt = nil
+                }
+            } else {
+                ddiMounted = newDDIState
+            }
         }
         // Heartbeat status is updated automatically by startHeartbeatOnce
     }
@@ -997,30 +1014,112 @@ struct ContentView: View {
         networkMonitor?.cancel()
         networkMonitor = nil
     }
+    
+    /// Start DDI status monitoring
+    private func startDDIMonitoring() {
+        // Stop any existing timer
+        stopDDIMonitoring()
+        
+        guard pairingFile != nil && heartbeatRunning else {
+            print("[DDI Monitor] Not starting - pairing or heartbeat not ready")
+            return
+        }
+        
+        print("[DDI Monitor] Starting periodic DDI status checks")
+        
+        // Set initial state
+        lastKnownDDIMountState = ddiMounted
+        
+        // Reset retry counter when starting monitoring (fresh start)
+        ddiMountRetryCount = 0
+        lastDDIMountAttempt = nil
+        print("[DDI Monitor] Reset retry counter for fresh start")
+        
+        // Check DDI status every 5 seconds
+        ddiMonitorTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [self] _ in
+            // Only monitor if pairing and heartbeat are active
+            guard self.pairingFile != nil && self.heartbeatRunning else {
+                print("[DDI Monitor] Stopping - pairing or heartbeat lost")
+                self.stopDDIMonitoring()
+                return
+            }
+            
+            let currentDDIState = self.computeDDIMounted()
+            
+            // Detect state change
+            if currentDDIState != self.lastKnownDDIMountState {
+                print("[DDI Monitor] DDI state changed: \(self.lastKnownDDIMountState) -> \(currentDDIState)")
+                
+                self.lastKnownDDIMountState = currentDDIState
+                self.ddiMounted = currentDDIState
+                
+                // If DDI became unmounted, try to remount it
+                if !currentDDIState {
+                    print("[DDI Monitor] DDI was unmounted (likely due to device reboot). Attempting auto-remount...")
+                    self.attemptAutoMountDDIWithRetry()
+                } else {
+                    // DDI successfully mounted
+                    print("[DDI Monitor] DDI is now mounted")
+                    self.ddiMountRetryCount = 0
+                }
+            } else if !currentDDIState {
+                // DDI still not mounted, check if we should retry
+                self.checkAndRetryDDIMount()
+            }
+        }
+    }
+    
+    /// Stop DDI monitoring
+    private func stopDDIMonitoring() {
+        ddiMonitorTimer?.invalidate()
+        ddiMonitorTimer = nil
+        print("[DDI Monitor] Stopped")
+    }
+    
+    /// Attempt to mount DDI with retry logic
+    private func attemptAutoMountDDIWithRetry() {
+        // Check if we should rate-limit attempts
+        if let lastAttempt = lastDDIMountAttempt {
+            let timeSinceLastAttempt = Date().timeIntervalSince(lastAttempt)
+            
+            // Exponential backoff: wait 2^retryCount seconds (minimum 5 seconds)
+            let waitTime = max(5.0, pow(2.0, Double(ddiMountRetryCount)))
+            
+            if timeSinceLastAttempt < waitTime {
+                print("[DDI Mount Retry] Waiting before next attempt (waited \(Int(timeSinceLastAttempt))s / need \(Int(waitTime))s)")
+                return
+            }
+        }
+        
+        lastDDIMountAttempt = Date()
+        ddiMountRetryCount += 1
+        
+        print("[DDI Mount Retry] Attempt #\(ddiMountRetryCount)")
+        
+        // Don't show error alerts for automatic retry attempts
+        attemptAutoMountDDI(showErrorAlert: false)
+    }
+    
+    /// Check if we should retry DDI mount
+    private func checkAndRetryDDIMount() {
+        // Only retry up to 5 times
+        guard ddiMountRetryCount < 5 else {
+            // At max retries - log once and wait for external trigger (network change, manual retry, etc.)
+            if ddiMountRetryCount == 5 {
+                print("[DDI Mount Retry] Reached max attempts (5/5). Waiting for manual retry or network change.")
+            }
+            return
+        }
+        
+        attemptAutoMountDDIWithRetry()
+    }
 
     private func respringNow() throws {
-        guard let context = JITEnableContext.shared else { return }
-        let processes = try getRunningProcesses()
-        // Use obfuscated process path
-        if let pid_backboardd = processes.first(where: { $0.value?.hasSuffix(ObfuscatedPaths.backboardd) == true })?.key {
-            try context.killProcess(withPID: pid_backboardd, signal: SIGKILL)
-        }
+        try RespringHelper.respring()
     }
 
     private func getRunningProcesses() throws -> [Int32 : String?] {
-        // Fix #4 & #5: Add guard to prevent crashes
-        guard let context = JITEnableContext.shared,
-              let processList = try? context.fetchProcessList() as? [[String: Any]] else {
-            return [:]
-        }
-        
-        return Dictionary(
-            uniqueKeysWithValues: processList.compactMap { item in
-                guard let pid = item["pid"] as? Int32 else { return nil }
-                let path = item["path"] as? String
-                return (pid, path)
-            }
-        )
+        try RespringHelper.getRunningProcesses()
     }
 
     private struct RemoteVersion: Decodable {
@@ -1056,8 +1155,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Status Sheet
-// MARK: - Status Sheet
+// MARK: - Status Sheet (Feather-style)
 struct StatusSheet: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     @Binding var pairingFileLoaded: Bool
@@ -1069,57 +1167,45 @@ struct StatusSheet: View {
     var onClose: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(Color.white.opacity(0.3))
-                .frame(width: 40, height: 5)
-                .padding(.vertical, 16)
-
-            ScrollView {
-                VStack(spacing: 12) {
-                    Text(L("system_status"))
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-
+        NavigationStack {
+            Form {
+                Section(header: Text(L("system_status"))) {
                     CardRow(title: L("status_pairing_file"), subtitle: pairingFileLoaded ? L("status_pairing_loaded") : L("status_pairing_missing"), ok: pairingFileLoaded, showChevron: false, trailing: nil)
-                        .padding(.horizontal, 20)
 
                     CardRow(title: L("status_heartbeat"), subtitle: heartbeatRunning ? L("status_heartbeat_running") : L("status_heartbeat_stopped"), ok: heartbeatRunning, showChevron: false, trailing: nil)
-                        .padding(.horizontal, 20)
 
                     CardRow(title: L("status_ddi"), subtitle: ddiMounted ? L("status_ddi_mounted") : L("status_ddi_unmounted"), ok: ddiMounted, showChevron: false, trailing: nil)
-                        .padding(.horizontal, 20)
+                }
 
-                    Spacer(minLength: 40)
+                Section(header: Text(L("section_actions"))) {
+                    if heartbeatRunning && !ddiMounted {
+                        Button(L("button_mount_ddi")) {
+                            onMountDDI()
+                        }
+                    }
+                    
+                    Button(pairingFileLoaded ? L("button_reset_pairing") : L("button_select_pairing")) {
+                        if pairingFileLoaded { onResetPairing() } else { onImportPairing() }
+                        onClose()
+                    }
+                    .tint(pairingFileLoaded ? .red : .accentColor)
                 }
             }
-
-            VStack(spacing: 12) {
-                // Show Mount DDI button if heartbeat is running but DDI not mounted
-                if heartbeatRunning && !ddiMounted {
-                    SecondaryActionButton(title: L("button_mount_ddi"), disabled: false) {
-                        onMountDDI()
+            .headerProminence(.increased)
+            .navigationTitle(L("system_status"))
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
                     }
                 }
-                
-                WalletStyleButton(
-                    title: pairingFileLoaded ? L("button_reset_pairing") : L("button_select_pairing"),
-                    action: { if pairingFileLoaded { onResetPairing() } else { onImportPairing() }; onClose() }
-                )
             }
-            .padding(20)
-            .padding(.bottom, 20)
         }
-        .frame(height: 500)
-        .background(AppTheme.bg.padding(.bottom, -100).ignoresSafeArea())
-        .clipShape(RoundedCorner(radius: 24, corners: [.topLeft, .topRight]))
-        .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: -5)
     }
 }
 
-// MARK: - Apply Sheet
+// MARK: - Apply Sheet (Feather-style)
 struct ApplySheet: View {
     @ObservedObject private var localizationManager = LocalizationManager.shared
     @Binding var logs: [String]
@@ -1132,75 +1218,76 @@ struct ApplySheet: View {
     var onClose: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(Color.white.opacity(0.3))
-                .frame(width: 40, height: 5)
-                .padding(.vertical, 16)
-
-            ScrollView {
-                VStack(spacing: 16) {
-                    Text(L("apply_tweaks"))
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 20)
-
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L("respring_after_apply"))
-                                .font(.system(size: 17, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white)
-                            Text(L("respring_desc"))
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $enableRespring).labelsHidden()
+        NavigationStack {
+            Form {
+                optionsSection
+                statusSection
+                if !logs.isEmpty {
+                    logsSection
+                }
+                actionsSection
+            }
+            .headerProminence(.increased)
+            .navigationTitle(L("apply_tweaks"))
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(18)
-                    .background(AppTheme.row)
-                    .cornerRadius(16)
-                    .padding(.horizontal, 20)
-
-                    Text(progressText)
-                        .font(.system(size: 14, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .padding(.top, 4)
-
-                    if !logs.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(L("logs")).font(.headline).foregroundStyle(.white)
-                            ForEach(logs, id: \.self) { log in
-                                Text(log)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                                    .padding(.vertical, 2)
-                                Divider().background(Color.white.opacity(0.1))
-                            }
-                        }
-                        .padding(18)
-                        .background(AppTheme.row)
-                        .cornerRadius(16)
-                        .padding(.horizontal, 20)
-                    }
-
-                    Spacer(minLength: 40)
                 }
             }
-
-            VStack(spacing: 12) {
-                SecondaryActionButton(title: L("clear_uuid"), disabled: bookassetdUUID.isEmpty) { onClearUUID() }
-                WalletStyleButton(title: isRunning ? L("applying") : L("apply_enabled_tweaks"), isLoading: isRunning, disabled: isRunning) {
-                    onApply()
-                }
-            }
-            .padding(20)
-            .padding(.bottom, 20)
         }
-        .frame(height: 600)
-        .background(AppTheme.bg.padding(.bottom, -100).ignoresSafeArea())
-        .clipShape(RoundedCorner(radius: 24, corners: [.topLeft, .topRight]))
-        .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: -5)
+    }
+
+    @ViewBuilder
+    private var optionsSection: some View {
+        Section {
+            Toggle(L("respring_after_apply"), isOn: $enableRespring)
+        }
+    }
+
+    @ViewBuilder
+    private var statusSection: some View {
+        Section(header: Text(L("section_status"))) {
+            HStack(spacing: 12) {
+                if isRunning {
+                    ProgressView()
+                }
+                Text(progressText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var logsSection: some View {
+        Section(header: Text(L("logs"))) {
+            ForEach(logs, id: \.self) { log in
+                Text(log)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var actionsSection: some View {
+        Section(header: Text(L("section_actions"))) {
+            Button(L("clear_uuid"), role: .destructive) {
+                onClearUUID()
+            }
+            .disabled(bookassetdUUID.isEmpty)
+        }
+
+        Section {
+            WalletStyleButton(
+                title: isRunning ? L("applying") : L("apply_enabled_tweaks"),
+                isLoading: isRunning,
+                disabled: isRunning,
+                action: onApply
+            )
+        }
     }
 }

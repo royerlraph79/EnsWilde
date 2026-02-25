@@ -43,40 +43,40 @@ struct LogView: View {
     @State private var exportError: String?
 
     var body: some View {
-        NavigationView {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(GLOBAL_LOG.text)
-                        .font(.system(size: 12).monospaced())
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
+        ScrollViewReader { proxy in
+            ScrollView {
+                Text(GLOBAL_LOG.text)
+                    .font(.system(size: 12).monospaced())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
 
-                    Spacer().id(0)
-                }
-                .onAppear {
-                    guard !ran else { return }
-                    ran = true
+                Spacer().id(0)
+            }
+            .onAppear {
+                guard !ran else { return }
+                ran = true
 
-                    logPipe.fileHandleForReading.readabilityHandler = { fileHandle in
-                        let data = fileHandle.availableData
-                        guard !data.isEmpty, var logString = String(data: data, encoding: .utf8) else { return }
+                logPipe.fileHandleForReading.readabilityHandler = { fileHandle in
+                    let data = fileHandle.availableData
+                    guard !data.isEmpty, var logString = String(data: data, encoding: .utf8) else { return }
 
-                        DispatchQueue.main.async {
-                            // Redact udid if present
-                            if !Utils.udid.isEmpty, logString.contains(Utils.udid) {
-                                logString = logString.replacingOccurrences(of: Utils.udid, with: "<redacted>")
-                            }
-
-                            log.append(logString)
-                            proxy.scrollTo(0)
+                    DispatchQueue.main.async {
+                        // Redact udid if present
+                        if !Utils.udid.isEmpty, logString.contains(Utils.udid) {
+                            logString = logString.replacingOccurrences(of: Utils.udid, with: "<redacted>")
                         }
+
+                        log.append(logString)
+                        proxy.scrollTo(0)
                     }
                 }
             }
-            .navigationTitle("Log output")
-            .toolbar {
+        }
+        .navigationTitle("Log output")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     Button("Clear") {
                         GLOBAL_LOG.clear()
@@ -110,7 +110,6 @@ struct LogView: View {
                         .padding()
                 }
             }
-        }
     }
 
     init() {

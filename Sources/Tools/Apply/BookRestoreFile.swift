@@ -41,6 +41,12 @@ struct BookRestoreFile {
         
         /// Apple Wallet image (uses media approach in ZBLDOWNLOADINFO)
         case walletImage
+        
+        /// Feature Flags plist (uses .zassetpath approach in ZBLDOWNLOADINFO)
+        case featureFlags
+        
+        /// Placeholder file for folder creation (uses .zassetpath approach)
+        case placeholder
     }
     
     /// Create a sound file entry
@@ -80,6 +86,26 @@ struct BookRestoreFile {
             fileType: .walletImage,
             localFileName: mediaFileName,
             contents: contents
+        )
+    }
+    
+    /// Create a Feature Flags plist file entry
+    static func featureFlags(targetPath: String, contents: Data) -> BookRestoreFile {
+        return BookRestoreFile(
+            targetPath: targetPath,
+            fileType: .featureFlags,
+            localFileName: nil,
+            contents: contents
+        )
+    }
+    
+    /// Create a placeholder file entry (for folder creation)
+    static func placeholder(targetPath: String) -> BookRestoreFile {
+        return BookRestoreFile(
+            targetPath: targetPath,
+            fileType: .placeholder,
+            localFileName: nil,
+            contents: Data() // Empty data
         )
     }
 }

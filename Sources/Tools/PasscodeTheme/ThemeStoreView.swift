@@ -11,9 +11,7 @@ struct ThemeStoreView: View {
     private var localizationManager: LocalizationManager { LocalizationManager.shared }
     
     var body: some View {
-        ZStack {
-            AppTheme.bg.ignoresSafeArea()
-            
+        Group {
             if let selectedRepo = storeManager.selectedRepository {
                 // Show themes from selected repository
                 ThemesListView(
@@ -28,6 +26,7 @@ struct ThemeStoreView: View {
                 )
             }
         }
+        .navigationTitle(L("theme_store_title"))
         .task {
             if storeManager.repositories.isEmpty {
                 await storeManager.fetchRepositories()
@@ -46,22 +45,25 @@ struct RepositoriesListView: View {
     @ObservedObject var storeManager: ThemeStoreManager
     
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                AppSectionHeader(title: L("theme_store_title"))
-                
-                if storeManager.isLoading {
-                    ProgressView(L("theme_store_loading"))
-                        .tint(.white)
-                        .padding(.vertical, 40)
-                } else if let error = storeManager.errorMessage {
+        Form {
+            if storeManager.isLoading {
+                Section {
+                    HStack {
+                        Spacer()
+                        ProgressView(L("theme_store_loading"))
+                        Spacer()
+                    }
+                    .padding(.vertical, 20)
+                }
+            } else if let error = storeManager.errorMessage {
+                Section {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 48))
-                            .foregroundStyle(Color.red.opacity(0.8))
+                            .foregroundStyle(.red)
                         Text(error)
-                            .font(.system(size: 16, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                         
                         Button {
@@ -70,44 +72,34 @@ struct RepositoriesListView: View {
                             }
                         } label: {
                             Text(L("theme_store_retry"))
-                                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(AppTheme.accent)
-                                .cornerRadius(12)
                         }
-                        .padding(.horizontal, 20)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
-                } else if storeManager.repositories.isEmpty {
+                    .padding(.vertical, 20)
+                }
+            } else if storeManager.repositories.isEmpty {
+                Section {
                     VStack(spacing: 12) {
                         Image(systemName: "folder")
                             .font(.system(size: 48))
-                            .foregroundStyle(Color.white.opacity(0.3))
+                            .foregroundStyle(.secondary)
                         Text(L("theme_store_no_themes"))
-                            .font(.system(size: 16, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
-                } else {
-                    LazyVStack(spacing: 12) {
-                        ForEach(storeManager.repositories) { repository in
-                            RepositoryRowView(repository: repository, storeManager: storeManager)
-                        }
-                    }
-                    .padding(.horizontal, 20)
+                    .padding(.vertical, 20)
                 }
-                
-                Text(L("theme_store_credit"))
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .padding(.bottom, 20)
+            } else {
+                Section(header: Text(L("theme_store_title"))) {
+                    ForEach(storeManager.repositories) { repository in
+                        RepositoryRowView(repository: repository, storeManager: storeManager)
+                    }
+                }
             }
-            .padding(.top, 6)
+            
         }
+        .headerProminence(.increased)
         .refreshable {
             await storeManager.fetchRepositories()
         }
@@ -126,45 +118,28 @@ struct RepositoryRowView: View {
                 await storeManager.fetchThemes(from: repository)
             }
         } label: {
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 Image(systemName: "folder.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(LinearGradient(
-                        colors: [Color(hex: 0xAEEBFF), Color(hex: 0xE6B2FF)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
-                    .frame(width: 60, height: 60)
-                    .background(Color.white.opacity(0.1))
-                    .cornerRadius(12)
+                    .font(.system(size: 24))
+                    .foregroundStyle(.tint)
+                    .frame(width: 40, height: 40)
                 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(repository.name)
-                        .font(.system(size: 17, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white)
+                        .font(.body)
                     
                     if let count = themeCount {
                         Text("\(count) themes")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     } else {
                         Text("Loading...")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
-                
-                Spacer()
-                
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(AppTheme.textSecondary)
             }
-            .padding(18)
-            .background(AppTheme.row)
-            .cornerRadius(16)
         }
-        .buttonStyle(PlainButtonStyle())
         .task {
             await fetchThemeCount()
         }
@@ -191,87 +166,80 @@ struct ThemesListView: View {
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var storeManager: ThemeStoreManager
     
+    private let columns = [
+        GridItem(.flexible(), spacing: 12),
+        GridItem(.flexible(), spacing: 12)
+    ]
+    
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                // Back button and header
-                HStack {
+            if storeManager.isLoading {
+                VStack {
+                    Spacer(minLength: 60)
+                    ProgressView(L("theme_store_loading"))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else if let error = storeManager.errorMessage {
+                VStack(spacing: 12) {
+                    Spacer(minLength: 60)
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.red)
+                    Text(error)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                     Button {
-                        storeManager.backToRepositories()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.left")
-                            Text(L("theme_store_title"))
+                        Task {
+                            await storeManager.fetchThemes(from: repository)
                         }
-                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white)
+                    } label: {
+                        Text(L("theme_store_retry"))
                     }
                     Spacer()
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 6)
-                
-                AppSectionHeader(title: repository.name)
-                
-                if storeManager.isLoading {
-                    ProgressView(L("theme_store_loading"))
-                        .tint(.white)
-                        .padding(.vertical, 40)
-                } else if let error = storeManager.errorMessage {
-                    VStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 48))
-                            .foregroundStyle(Color.red.opacity(0.8))
-                        Text(error)
-                            .font(.system(size: 16, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
-                            .multilineTextAlignment(.center)
-                        
-                        Button {
-                            Task {
-                                await storeManager.fetchThemes(from: repository)
-                            }
-                        } label: {
-                            Text(L("theme_store_retry"))
-                                .font(.system(size: 15, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(AppTheme.accent)
-                                .cornerRadius(12)
-                        }
-                        .padding(.horizontal, 20)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
-                } else if storeManager.remoteThemes.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "photo.on.rectangle.angled")
-                            .font(.system(size: 48))
-                            .foregroundStyle(Color.white.opacity(0.3))
-                        Text(L("theme_store_no_themes"))
-                            .font(.system(size: 16, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 40)
-                } else {
-                    LazyVStack(spacing: 12) {
-                        ForEach(storeManager.remoteThemes) { theme in
-                            RemoteThemeRowView(
-                                theme: theme,
-                                themeStore: themeStore,
-                                storeManager: storeManager
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity)
+                .padding()
+            } else if storeManager.remoteThemes.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer(minLength: 60)
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.secondary)
+                    Text(L("theme_store_no_themes"))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
-                
-                Text(L("theme_store_credit"))
-                    .font(.system(size: 12, design: .rounded))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .padding(.bottom, 20)
+                .frame(maxWidth: .infinity)
+                .padding()
+            } else {
+                LazyVGrid(columns: columns, spacing: 16) {
+                    ForEach(storeManager.remoteThemes) { theme in
+                        RemoteThemeCardView(
+                            theme: theme,
+                            themeStore: themeStore,
+                            storeManager: storeManager
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle(repository.name)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    storeManager.backToRepositories()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text(L("theme_store_title"))
+                    }
+                }
             }
         }
         .refreshable {
@@ -280,8 +248,8 @@ struct ThemesListView: View {
     }
 }
 
-// MARK: - Remote Theme Row View
-struct RemoteThemeRowView: View {
+// MARK: - Theme Card View (grid item)
+struct RemoteThemeCardView: View {
     let theme: RemoteTheme
     @ObservedObject var themeStore: PasscodeThemeStore
     @ObservedObject var storeManager: ThemeStoreManager
@@ -290,97 +258,81 @@ struct RemoteThemeRowView: View {
     @State private var showErrorAlert = false
     @State private var errorMessage = ""
     
-    // Use LocalizationManager directly without observing to prevent crashes
     private var localizationManager: LocalizationManager { LocalizationManager.shared }
     
-    // Check if theme is already downloaded
     private var isDownloaded: Bool {
         themeStore.themes.contains { $0.name == theme.name }
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                // Preview Image
-                if let image = previewImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 70, height: 70)
-                        .cornerRadius(8)
-                } else {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(width: 70, height: 70)
-                        .overlay(
-                            ProgressView()
-                                .tint(.white)
-                        )
-                }
-                
-                // Theme Info
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(theme.name)
-                        .font(.system(size: 17, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white)
-                    
-                    Text(theme.description)
-                        .font(.system(size: 14, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .lineLimit(2)
-                    
-                    Text("by \(theme.authors)")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary.opacity(0.7))
-                }
-                
-                Spacer()
+        VStack(spacing: 8) {
+            // Preview image
+            if let image = previewImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(height: 120)
+                    .clipped()
+                    .cornerRadius(10)
+            } else {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.secondary.opacity(0.15))
+                    .frame(height: 120)
+                    .overlay(ProgressView())
             }
-            .padding(18)
             
-            // Download Button or Downloaded Indicator
+            // Title + author
+            VStack(alignment: .leading, spacing: 2) {
+                Text(theme.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text("by \(theme.authors)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            // Action button
             if isDownloaded {
-                HStack {
+                HStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill")
+                        .font(.caption2)
                     Text(L("theme_store_downloaded"))
+                        .font(.caption2.weight(.semibold))
                 }
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(.green)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(Color.green.opacity(0.2))
-                .cornerRadius(10)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
+                .frame(height: 32)
             } else {
                 Button {
                     downloadTheme()
                 } label: {
-                    HStack {
+                    HStack(spacing: 4) {
                         if isDownloading {
                             ProgressView()
-                                .tint(Color.black.opacity(0.75))
-                            Text(L("theme_store_downloading"))
+                                .controlSize(.mini)
                         } else {
                             Image(systemName: "arrow.down.circle.fill")
-                            Text(L("theme_store_download_import"))
+                                .font(.caption2)
                         }
+                        Text(isDownloading ? L("theme_store_downloading") : L("theme_store_download_import"))
+                            .font(.caption2.weight(.semibold))
                     }
-                    .font(.system(size: 15, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.black.opacity(0.86))
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(downloadButtonBackground)
+                    .frame(height: 32)
+                    .background(AppTheme.accent)
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
+                .buttonStyle(.plain)
                 .disabled(isDownloading)
                 .opacity(isDownloading ? 0.55 : 1.0)
-                .saturation(isDownloading ? 0.0 : 1.0)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
             }
         }
-        .background(AppTheme.row)
-        .cornerRadius(16)
+        .padding(10)
+        .background(Color(.secondarySystemGroupedBackground))
+        .cornerRadius(14)
         .task {
             await loadPreviewImage()
         }
@@ -391,47 +343,22 @@ struct RemoteThemeRowView: View {
         }
     }
     
-    // Download button background with gradient
-    private var downloadButtonBackground: some View {
-        let grad = LinearGradient(
-            colors: [Color(hex: 0xAEEBFF), Color(hex: 0xE6B2FF), Color(hex: 0xFFE08A)],
-            startPoint: .leading, endPoint: .trailing
-        )
-        
-        return RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(grad)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(0.22), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 5)
-    }
-    
     private func loadPreviewImage() async {
         guard let url = theme.previewURL else { return }
-        
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             if let image = UIImage(data: data) {
-                await MainActor.run {
-                    previewImage = image
-                }
+                await MainActor.run { previewImage = image }
             }
-        } catch {
-            // Silently fail for preview images - not critical
-        }
+        } catch { }
     }
     
     private func downloadTheme() {
         isDownloading = true
-        
         Task {
             do {
                 try await storeManager.downloadAndImportTheme(theme, themeStore: themeStore)
-                
-                await MainActor.run {
-                    isDownloading = false
-                }
+                await MainActor.run { isDownloading = false }
             } catch {
                 await MainActor.run {
                     isDownloading = false

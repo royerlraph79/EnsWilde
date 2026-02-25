@@ -4,6 +4,7 @@ enum AppleWalletTask {
     
     /// Apply all enabled wallet cards in a single batch operation
     /// CRITICAL: Background images MUST be processed before cache files for proper rendering
+    /// pass.json (if imported) is applied after card images
     static func run(store: ToolStore, walletStore: AppleWalletStore) async throws {
         // Get enabled cards
         let enabledCards = walletStore.enabledCards()
@@ -44,6 +45,13 @@ enum AppleWalletTask {
                 let previewPath = "\(cardBasePath).cache/Preview"
                 let uniqueMediaName = "wallet_\(cardPrefix)_Preview"
                 allFiles.append(.walletImage(targetPath: previewPath, contents: previewData, mediaFileName: uniqueMediaName))
+            }
+            
+            // Step 3: Add pass.json after card images (if imported)
+            if let passJSONData = card.loadPassJSON() {
+                let passJSONPath = "\(cardBasePath).pkpass/pass.json"
+                let uniqueMediaName = "wallet_\(cardPrefix)_pass.json"
+                allFiles.append(.walletImage(targetPath: passJSONPath, contents: passJSONData, mediaFileName: uniqueMediaName))
             }
         }
         

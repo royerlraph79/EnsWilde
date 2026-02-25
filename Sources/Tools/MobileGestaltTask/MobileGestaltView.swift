@@ -24,278 +24,16 @@ struct MobileGestaltView: View {
     @State var modelName: String = ""
 
     var body: some View {
-        ZStack {
-            AppTheme.bg.ignoresSafeArea()
-            
-            ScrollView {
-                VStack(spacing: 12) {
-                    // MobileGestalt Section
-                    AppSectionHeader(title: L("tool_mobile_gestalt"))
-                    
-                    // Enable Tweak Toggle
-                    CardRow(
-                        title: L("enable_tweak"),
-                        subtitle: toolStore.replaceMobileGestaltEnabled ? L("enabled") : L("disabled"),
-                        ok: nil,
-                        showChevron: false,
-                        trailing: AnyView(Toggle("", isOn: $toolStore.replaceMobileGestaltEnabled).labelsHidden())
-                    )
-                    .padding(.horizontal, 20)
-                    
-                    // Device Subtype & Dynamic Island Section
-                    AppSectionHeader(title: L("section_device_subtype"))
-                    
-                    VStack(spacing: 0) {
-                        // Dynamic Island Picker
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(L("mg_device_subtype_preset"))
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                            
-                            Picker("Device Subtype", selection: $dynamicIslandType) {
-                                Text(L("mg_subtype_none")).tag(0)
-                                Text(L("mg_subtype_2436")).tag(1)
-                                Text(L("mg_subtype_2556")).tag(2)
-                                Text(L("mg_subtype_2796")).tag(3)
-                                Text(L("mg_subtype_2976")).tag(4)
-                                Text(L("mg_subtype_2622")).tag(5)
-                                Text(L("mg_subtype_2868")).tag(6)
-                                Text(L("mg_subtype_2736")).tag(7)
-                            }
-                            .pickerStyle(.menu)
-                            .tint(.white)
-                            .onChange(of: dynamicIslandType) { newValue in
-                                applyDynamicIsland(type: newValue)
-                            }
-                        }
-                        .padding(18)
-                        
-                        Divider()
-                            .background(Color.white.opacity(0.1))
-                            .padding(.leading, 18)
-                        
-                        // RDAR Fix Toggle
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(L("mg_rdar_fix"))
-                                    .foregroundStyle(.white)
-                                    .font(.system(size: 17, weight: .medium, design: .rounded))
-                                Text(L("mg_rdar_fix_desc"))
-                                    .font(.system(size: 13, design: .rounded))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                            }
-                            Spacer()
-                            Toggle("", isOn: $enableRdarFix)
-                                .labelsHidden()
-                                .disabled(dynamicIslandType == 0)
-                        }
-                        .padding(18)
-                        .opacity(dynamicIslandType == 0 ? 0.5 : 1.0)
-                        
-                        Divider()
-                            .background(Color.white.opacity(0.1))
-                            .padding(.leading, 18)
-                        
-                        // Change Device Model Name
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(L("mg_change_model_name"))
-                                    .foregroundStyle(.white)
-                                    .font(.system(size: 17, weight: .medium, design: .rounded))
-                                Spacer()
-                                Toggle("", isOn: $enableModelName)
-                                    .labelsHidden()
-                            }
-                            
-                            if enableModelName {
-                                TextField(L("mg_model_name_placeholder"), text: $modelName)
-                                    .textFieldStyle(.plain)
-                                    .padding(12)
-                                    .background(Color.white.opacity(0.1))
-                                    .cornerRadius(8)
-                                    .foregroundStyle(.white)
-                            }
-                            
-                            Text(L("mg_model_name_desc"))
-                                .font(.system(size: 13, design: .rounded))
-                                .foregroundStyle(AppTheme.textSecondary)
-                        }
-                        .padding(18)
-                    }
-                    .background(AppTheme.row)
-                    .cornerRadius(16)
-                    .padding(.horizontal, 20)
-                    
-                    // Hardware Features (Grouped - no spacing)
-                    AppSectionHeader(title: L("section_hardware_features"))
-                    VStack(spacing: 0) {
-                        // Boot & Sound
-                        groupedToggleRow(L("mg_boot_chime"), binding: bindingForMGKeys(["QHxt+hGLaBPbQJbXiUJX3w"]), isFirst: true)
-                        groupedToggleRow(L("mg_charge_limit"), binding: bindingForMGKeys(["37NVydb//GP/GrhuTN+exg"]), disabled: Utils.requiresVersion(17))
-                        if UIDevice._hasHomeButton() {
-                            groupedToggleRow(L("mg_tap_to_wake"), binding: bindingForMGKeys(["yZf3GTRMGTuwSV/lD7Cagw"]))
-                        }
-                        groupedToggleRow(L("mg_camera_button"), binding: bindingForMGKeys(["CwvKxM2cEogD3p+HYgaW0Q", "oOV1jhJbdV3AddkcCg0AEA"]), disabled: Utils.requiresVersion(18), isLast: true)
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // UI Effects
-                    VStack(spacing: 0) {
-                        groupedToggleRow(L("mg_disable_parallax"), binding: bindingForMGKeys(["UIParallaxCapability"], type: Int.self, defaultValue: 1, enableValue: 0), isFirst: true)
-                        if UIDevice.current.userInterfaceIdiom == .pad {
-                            groupedToggleRow(L("mg_stage_manager"), binding: bindingForMGKeys(["qeaj75wk3HF4DwQ8qbIi7g"]), isLast: true)
-                        } else {
-                            groupedToggleRow(L("mg_stage_manager"), binding: bindingForMGKeys(["qeaj75wk3HF4DwQ8qbIi7g"]), isLast: UIDevice.current.userInterfaceIdiom != .pad)
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // iPad Features
-                    VStack(spacing: 0) {
-                        groupedToggleRow(L("mg_install_ipad_apps"), binding: bindingForMGKeys(["9MZ5AdH43csAUajl/dU+IQ"], type: [Int].self, defaultValue: [1], enableValue: [1, 2]), isFirst: true, isLast: true)
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // Region & Location
-                    VStack(spacing: 0) {
-                        groupedToggleRow(L("mg_disable_region"), binding: bindingForRegionRestriction(), isFirst: true)
-                        groupedToggleRow(L("mg_find_my_friends"), binding: bindingForMGKeys(["Y2Y67z0Nq/XdDXgW2EeaVg"]), isLast: true)
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // Accessories
-                    VStack(spacing: 0) {
-                        groupedToggleRow(L("mg_apple_pencil"), binding: bindingForMGKeys(["yhHcB0iH0d1XzPO/CFd3ow"]), isFirst: true)
-                        groupedToggleRow(L("mg_action_button"), binding: bindingForMGKeys(["cT44WE1EohiwRzhsZ8xEsw"]), disabled: Utils.requiresVersion(17), isLast: true)
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // Internal Features
-                    VStack(spacing: 0) {
-                        groupedToggleRow(L("mg_internal_storage"), binding: bindingForMGKeys(["LBJfwOEzExRxzlAnSuI7eg"]), isFirst: true)
-                        groupedToggleRow(L("mg_internal_stuff"), binding: bindingForInternalStuff())
-                        groupedToggleRow(L("mg_security_research"), binding: bindingForMGKeys(["XYlJKKkj2hztRP1NWWnhlw"]))
-                        groupedToggleRow(L("mg_metal_hud"), binding: bindingForMGKeys(["EqrsVvjcYDdxHBiQmGhAWw"]), isLast: true)
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // Safety Features
-                    VStack(spacing: 0) {
-                        groupedToggleRow(L("mg_crash_detection"), binding: bindingForMGKeys(["HCzWusHQwZDea6nNhaKndw"]), isFirst: true, isLast: true)
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // Display Features (iOS 18+)
-                    VStack(spacing: 0) {
-                        groupedToggleRow(L("mg_aod"), binding: bindingForMGKeys(["j8/Omm6s1lsmTDFsXjsBfA", "2OOJf1VhaM7NxfRok3HbWQ"]), disabled: Utils.requiresVersion(18), isFirst: true)
-                        groupedToggleRow(L("mg_aod_vibrancy"), binding: bindingForMGKeys(["ykpu7qyhqFweVMKtxNylWA"]), disabled: Utils.requiresVersion(18))
-                        groupedToggleRow(L("mg_enable_lglpm"), binding: bindingForMGKeys(["SAGvsp6O6kAQ4fEfDJpC4Q"]))
-                        groupedToggleRow(L("mg_disable_lglpm"), binding: bindingForMGKeys(["SAGvsp6O6kAQ4fEfDJpC4Q"], type: Int.self, defaultValue: 1, enableValue: 0), isLast: true)
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // AI Features
-                    VStack(spacing: 0) {
-                        groupedToggleRow(L("mg_apple_intelligence"), binding: bindingForAppleIntelligence(), disabled: Utils.requiresVersion(18), isFirst: true, isLast: true)
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    // Device spoofing Section
-                    AppSectionHeader(title: L("section_device_spoofing"))
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(L("mg_device_model"))
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
-                        
-                        Picker(L("mg_device_model"), selection: $productType) {
-                            Text(L("mg_device_model_unchanged")).tag(MobileGestaltView.machineName())
-                            if UIDevice.current.userInterfaceIdiom == .pad {
-                                Text("iPad Pro 11 inch 5th Gen").tag("iPad16,3")
-                            } else {
-                                Text("iPhone 15 Pro Max").tag("iPhone16,2")
-                                Text("iPhone 16 Pro Max").tag("iPhone17,2")
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .tint(.white)
-                        
-                        Text("Only change device model if you're downloading Apple Intelligence models. Face ID may break.")
-                            .font(.system(size: 12, design: .rounded))
-                            .foregroundStyle(AppTheme.textSecondary)
-                    }
-                    .padding(18)
-                    .background(AppTheme.row)
-                    .cornerRadius(16)
-                    .padding(.horizontal, 20)
-                    
-                    // iPadOS Section
-                    AppSectionHeader(title: "iPadOS")
-                    
-                    let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary
-                    toggleCardRow("Become iPadOS", binding: bindingForTrollPad(), disabled: cacheExtra?["+3Uf0Pm5F8Xy7Onyvko0vA"] as? String != "iPhone")
-                        .padding(.horizontal, 20)
-                    
-                    Text("Override user interface idiom to iPadOS, so you could use all iPadOS multitasking features on iPhone. Gives you the same capabilities as TrollPad, but may cause some issues.\nPLEASE DO NOT TURN OFF SHOW DOCK IN STAGE MANAGER OTHERWISE YOUR PHONE WILL BOOTLOOP WHEN ROTATING TO LANDSCAPE.")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    
-                    // Save / Reset Section
-                    AppSectionHeader(title: "Save / Reset")
-                    
-                    WalletStyleButton(title: L("mg_save_settings")) {
-                        do {
-                            saveProductType()
-                            try mobileGestalt.write(to: modMGURL)
-                            
-                            // Save resolution plist for RDAR fix
-                            try saveResolutionPlist()
-                            
-                            lastError = "Saved ModifiedMobileGestalt.plist. Now go Home → Apply Enabled Tools."
-                            showErrorAlert = true
-                        } catch {
-                            lastError = "Save failed: \(error)"
-                            showErrorAlert = true
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    SecondaryActionButton(title: "Reset Original") {
-                        do {
-                            let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary
-                            let wasTrollPadEnabled = (cacheExtra?["uKc7FPnEO++lVhHWHFlGbQ"] as? Int) == 1
-                            
-                            try? FileManager.default.removeItem(at: modMGURL)
-                            try FileManager.default.copyItem(at: origMGURL, to: modMGURL)
-                            mobileGestalt = try NSMutableDictionary(contentsOf: modMGURL, error: ())
-                            toolStore.replaceMobileGestaltEnabled = true
-                            
-                            if wasTrollPadEnabled {
-                                toolStore.bookassetdUUID = nil
-                                lastError = "Reset done. MobileGestalt tool enabled. Bookassetd UUID cleared (iPadOS was enabled). Now go Home → Apply Enabled Tools to apply the reset to system."
-                            } else {
-                                lastError = "Reset done. MobileGestalt tool enabled. Now go Home → Apply Enabled Tools to apply the reset to system."
-                            }
-                            showErrorAlert = true
-                        } catch {
-                            lastError = "Reset failed: \(error)"
-                            showErrorAlert = true
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                    
-                    Text("This screen only edits files in Documents. Use Home → Apply Enabled Tools to apply to system.")
-                        .font(.system(size: 12, design: .rounded))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.bottom, 20)
-                }
-                .padding(.top, 6)
-            }
+        Form {
+            enableSection
+            deviceSubtypeSection
+            hardwareFeaturesSection
+            displayAndUISection
+            systemFeaturesSection
+            advancedSection
+            saveResetSection
         }
+        .headerProminence(.increased)
         .alert("Message", isPresented: $showErrorAlert) {
             Button("OK") {}
         } message: {
@@ -367,56 +105,156 @@ struct MobileGestaltView: View {
             }
         }
     }
-    
-    // Helper function to create toggle rows
-    private func toggleCardRow(_ title: String, binding: Binding<Bool>, disabled: Bool = false) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .foregroundStyle(.white)
-                    .font(.system(size: 17, weight: .medium, design: .rounded))
-            }
-            Spacer()
-            Toggle("", isOn: binding)
-                .labelsHidden()
-                .disabled(disabled)
+
+    // MARK: - Body Sections
+
+    @ViewBuilder
+    private var enableSection: some View {
+        Section(header: Text(L("tool_mobile_gestalt"))) {
+            Toggle(L("enable_tweak"), isOn: $toolStore.replaceMobileGestaltEnabled)
         }
-        .padding(18)
-        .background(AppTheme.row)
-        .cornerRadius(16)
-        .opacity(disabled ? 0.5 : 1.0)
     }
-    
-    // Helper function for grouped rows (stick together like Settings.app)
-    private func groupedToggleRow(_ title: String, binding: Binding<Bool>, disabled: Bool = false, isFirst: Bool = false, isLast: Bool = false) -> some View {
-        VStack(spacing: 0) {
-            if isFirst {
-                Divider().opacity(0)
+
+    @ViewBuilder
+    private var deviceSubtypeSection: some View {
+        Section(header: Text(L("section_device_subtype"))) {
+            Picker(L("mg_device_subtype_preset"), selection: $dynamicIslandType) {
+                Text(L("mg_subtype_none")).tag(0)
+                Text(L("mg_subtype_2436")).tag(1)
+                Text(L("mg_subtype_2556")).tag(2)
+                Text(L("mg_subtype_2796")).tag(3)
+                Text(L("mg_subtype_2976")).tag(4)
+                Text(L("mg_subtype_2622")).tag(5)
+                Text(L("mg_subtype_2868")).tag(6)
+                Text(L("mg_subtype_2736")).tag(7)
             }
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(title)
-                        .foregroundStyle(.white)
-                        .font(.system(size: 17, weight: .medium, design: .rounded))
-                }
-                Spacer()
-                Toggle("", isOn: binding)
-                    .labelsHidden()
-                    .disabled(disabled)
+            .pickerStyle(.menu)
+            .onChange(of: dynamicIslandType) { newValue in
+                applyDynamicIsland(type: newValue)
             }
-            .padding(18)
-            .background(AppTheme.row)
-            .opacity(disabled ? 0.5 : 1.0)
             
-            if !isLast {
-                Divider()
-                    .background(Color.white.opacity(0.1))
-                    .padding(.leading, 18)
+            Toggle(L("mg_rdar_fix"), isOn: $enableRdarFix)
+                .disabled(dynamicIslandType == 0)
+            
+            Toggle(L("mg_change_model_name"), isOn: $enableModelName)
+            
+            if enableModelName {
+                TextField(L("mg_model_name_placeholder"), text: $modelName)
             }
         }
-        .background(AppTheme.row)
-        .cornerRadius(isFirst && isLast ? 16 : (isFirst ? 16 : (isLast ? 16 : 0)), corners: isFirst && isLast ? .allCorners : (isFirst ? [.topLeft, .topRight] : (isLast ? [.bottomLeft, .bottomRight] : [])))
     }
+
+    @ViewBuilder
+    private var hardwareFeaturesSection: some View {
+        Section(header: Text(L("section_hardware_features"))) {
+            Toggle(L("mg_boot_chime"), isOn: bindingForMGKeys(["QHxt+hGLaBPbQJbXiUJX3w"]))
+            Toggle(L("mg_charge_limit"), isOn: bindingForMGKeys(["37NVydb//GP/GrhuTN+exg"]))
+                .disabled(Utils.requiresVersion(17))
+            if UIDevice._hasHomeButton() {
+                Toggle(L("mg_tap_to_wake"), isOn: bindingForMGKeys(["yZf3GTRMGTuwSV/lD7Cagw"]))
+            }
+            Toggle(L("mg_camera_button"), isOn: bindingForMGKeys(["CwvKxM2cEogD3p+HYgaW0Q", "oOV1jhJbdV3AddkcCg0AEA"]))
+                .disabled(Utils.requiresVersion(18))
+        }
+    }
+
+    @ViewBuilder
+    private var displayAndUISection: some View {
+        Section(header: Text(L("section_display_and_ui"))) {
+            Toggle(L("mg_disable_parallax"), isOn: bindingForMGKeys(["UIParallaxCapability"], type: Int.self, defaultValue: 1, enableValue: 0))
+            Toggle(L("mg_stage_manager"), isOn: bindingForMGKeys(["qeaj75wk3HF4DwQ8qbIi7g"]))
+            Toggle(L("mg_aod"), isOn: bindingForMGKeys(["j8/Omm6s1lsmTDFsXjsBfA", "2OOJf1VhaM7NxfRok3HbWQ"]))
+                .disabled(Utils.requiresVersion(18))
+            Toggle(L("mg_aod_vibrancy"), isOn: bindingForMGKeys(["ykpu7qyhqFweVMKtxNylWA"]))
+                .disabled(Utils.requiresVersion(18))
+        }
+    }
+
+    @ViewBuilder
+    private var systemFeaturesSection: some View {
+        Section(header: Text(L("section_system_features"))) {
+            Toggle(L("mg_install_ipad_apps"), isOn: bindingForMGKeys(["9MZ5AdH43csAUajl/dU+IQ"], type: [Int].self, defaultValue: [1], enableValue: [1, 2]))
+            Toggle(L("mg_disable_region"), isOn: bindingForRegionRestriction())
+            Toggle(L("mg_apple_pencil"), isOn: bindingForMGKeys(["yhHcB0iH0d1XzPO/CFd3ow"]))
+            Toggle(L("mg_action_button"), isOn: bindingForMGKeys(["cT44WE1EohiwRzhsZ8xEsw"]))
+                .disabled(Utils.requiresVersion(17))
+            Toggle(L("mg_crash_detection"), isOn: bindingForMGKeys(["HCzWusHQwZDea6nNhaKndw"]))
+        }
+    }
+
+    @ViewBuilder
+    private var advancedSection: some View {
+        Section(header: Text(L("section_internal_features"))) {
+            Toggle(L("mg_internal_storage"), isOn: bindingForMGKeys(["LBJfwOEzExRxzlAnSuI7eg"]))
+            Toggle(L("mg_internal_stuff"), isOn: bindingForInternalStuff())
+            Toggle(L("mg_security_research"), isOn: bindingForMGKeys(["XYlJKKkj2hztRP1NWWnhlw"]))
+            Toggle(L("mg_metal_hud"), isOn: bindingForMGKeys(["EqrsVvjcYDdxHBiQmGhAWw"]))
+            Toggle(L("mg_apple_intelligence"), isOn: bindingForAppleIntelligence())
+                .disabled(Utils.requiresVersion(18))
+            Picker(L("mg_device_model"), selection: $productType) {
+                Text(L("mg_device_model_unchanged")).tag(MobileGestaltView.machineName())
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    Text("iPad Pro 11 inch 5th Gen").tag("iPad16,3")
+                } else {
+                    Text("iPhone 15 Pro Max").tag("iPhone16,2")
+                    Text("iPhone 16 Pro Max").tag("iPhone17,2")
+                }
+            }
+            .pickerStyle(.menu)
+            let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary
+            Toggle("Become iPadOS", isOn: bindingForTrollPad())
+                .disabled(cacheExtra?["+3Uf0Pm5F8Xy7Onyvko0vA"] as? String != "iPhone")
+        }
+    }
+
+    @ViewBuilder
+    private var saveResetSection: some View {
+        Section(header: Text(L("section_save_reset"))) {
+            Button(action: {
+                do {
+                    saveProductType()
+                    try mobileGestalt.write(to: modMGURL)
+                    
+                    // Save resolution plist for RDAR fix
+                    try saveResolutionPlist()
+                    
+                    lastError = "Saved ModifiedMobileGestalt.plist. Now go Home → Apply Enabled Tools."
+                    showErrorAlert = true
+                } catch {
+                    lastError = "Save failed: \(error)"
+                    showErrorAlert = true
+                }
+            }) {
+                Label(L("mg_save_settings"), systemImage: "square.and.arrow.down")
+            }
+            
+            Button(role: .destructive, action: {
+                do {
+                    let cacheExtra = mobileGestalt["CacheExtra"] as? NSMutableDictionary
+                    let wasTrollPadEnabled = (cacheExtra?["uKc7FPnEO++lVhHWHFlGbQ"] as? Int) == 1
+                    
+                    try? FileManager.default.removeItem(at: modMGURL)
+                    try FileManager.default.copyItem(at: origMGURL, to: modMGURL)
+                    mobileGestalt = try NSMutableDictionary(contentsOf: modMGURL, error: ())
+                    toolStore.replaceMobileGestaltEnabled = true
+                    
+                    if wasTrollPadEnabled {
+                        toolStore.bookassetdUUID = nil
+                        lastError = "Reset done. MobileGestalt tool enabled. Bookassetd UUID cleared (iPadOS was enabled). Now go Home → Apply Enabled Tools to apply the reset to system."
+                    } else {
+                        lastError = "Reset done. MobileGestalt tool enabled. Now go Home → Apply Enabled Tools to apply the reset to system."
+                    }
+                    showErrorAlert = true
+                } catch {
+                    lastError = "Reset failed: \(error)"
+                    showErrorAlert = true
+                }
+            }) {
+                Label("Reset Original", systemImage: "arrow.counterclockwise")
+            }
+        }
+    }
+    
 
     init(toolStore: ToolStore) {
         self.toolStore = toolStore

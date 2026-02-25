@@ -102,6 +102,61 @@ struct AppleWalletCard: Identifiable, Codable {
         }
         return try? Data(contentsOf: url)
     }
+    
+    // MARK: - pass.json Support
+    
+    /// URL for the pass.json file stored in the card's folder
+    var passJSONFileURL: URL {
+        cardFolderURL.appendingPathComponent("pass.json")
+    }
+    
+    /// Check if pass.json exists for this card
+    var hasPassJSON: Bool {
+        FileManager.default.fileExists(atPath: passJSONFileURL.path)
+    }
+    
+    /// Load pass.json data from the card's folder
+    func loadPassJSON() -> Data? {
+        guard hasPassJSON else { return nil }
+        return try? Data(contentsOf: passJSONFileURL)
+    }
+    
+    /// Save pass.json data to the card's folder
+    mutating func savePassJSON(_ data: Data?) {
+        createCardFolder()
+        guard let data = data else {
+            try? FileManager.default.removeItem(at: passJSONFileURL)
+            return
+        }
+        try? data.write(to: passJSONFileURL)
+    }
+    
+    /// Read primaryAccountSuffix from pass.json
+    func getPrimaryAccountSuffix() -> String? {
+        guard let data = loadPassJSON(),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return json["primaryAccountSuffix"] as? String
+    }
+    
+    /// Update primaryAccountSuffix in pass.json and save
+    mutating func setPrimaryAccountSuffix(_ value: String) {
+        guard let data = loadPassJSON(),
+              var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        json["primaryAccountSuffix"] = value
+        guard let updatedData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]) else {
+            return
+        }
+        savePassJSON(updatedData)
+    }
+    
+    /// Delete pass.json from the card's folder
+    mutating func deletePassJSON() {
+        savePassJSON(nil)
+    }
 }
 
 // MARK: - Apple Wallet Store
