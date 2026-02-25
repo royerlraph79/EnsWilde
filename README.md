@@ -77,3 +77,6 @@ Special thanks to the following for their contributions and support:
 * **@hanakim3945**: [`bl_sbx` exploit files and writeup](https://github.com/hanakim3945)
 * **@Lakr233**: [BBackupp](https://github.com/Lakr233/BBackupp)
 * **@libimobiledevice**: [Underlying communication libraries](https://github.com/libimobiledevice/libimobiledevice)
+* **@PoomSmart**: MobileGestalt dump
+* **@paragonarsi**: Apple Wallet Get
+* **@iTechExpert21**: Hide Dynamic Island
