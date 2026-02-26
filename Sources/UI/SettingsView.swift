@@ -23,7 +23,7 @@ struct SettingsView: View {
     private let tintOptions: [(name: String, hex: String)] = [
         ("Pink", "#f4b8e4"),
         ("Mauve", "#ca9ee6"),
-        ("Red", "#e78284"),
+        ("Red", "#ff0000"),
         ("Green", "#a6d189"),
         ("Blue", "#8caaee"),
     ]
