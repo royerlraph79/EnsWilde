@@ -71,6 +71,7 @@ jobs:
           echo "$PROVISIONING_PROFILE" | base64 --decode > profile.mobileprovision
           UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i profile.mobileprovision)")
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
+          echo "PP_UUID=$UUID" >> $GITHUB_ENV
 
       # -------------------------------------------------
       # Archive
@@ -85,7 +86,8 @@ jobs:
             -destination "generic/platform=iOS" \
             DEVELOPMENT_TEAM=${{ secrets.DEVELOPMENT_TEAM }} \
             CODE_SIGN_IDENTITY="Apple Development" \
-            CODE_SIGN_STYLE=Manual
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE_SPECIFIER=$PP_UUID
 
       # -------------------------------------------------
       # Export IPA
