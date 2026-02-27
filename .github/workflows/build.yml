@@ -1,4 +1,4 @@
-name: Build iOS IPA (Development)
+name: Build iOS IPA (Dev - CI Only)
 
 on:
   push:
@@ -11,22 +11,26 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select latest Xcode
+      - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      - name: Install CocoaPods (if needed)
+      # ---------------------------------
+      # Force-share scheme inside CI
+      # ---------------------------------
+      - name: Make scheme shared
         run: |
-          if [ -f "Podfile" ]; then
-            sudo gem install cocoapods
-            pod install
-          fi
+          mkdir -p EnsWilde.xcodeproj/xcshareddata/xcschemes
+          find EnsWilde.xcodeproj -name "*.xcscheme" -exec cp {} EnsWilde.xcodeproj/xcshareddata/xcschemes/ \;
 
-      # -----------------------------
-      # Setup temporary keychain
-      # -----------------------------
+      - name: List schemes (debug)
+        run: xcodebuild -list -project EnsWilde.xcodeproj
+
+      # ---------------------------------
+      # Setup keychain
+      # ---------------------------------
       - name: Setup keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -36,9 +40,6 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
 
-      # -----------------------------
-      # Import certificate
-      # -----------------------------
       - name: Import certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -56,9 +57,6 @@ jobs:
             -k "$KEYCHAIN_PASSWORD" \
             build.keychain
 
-      # -----------------------------
-      # Install provisioning profile
-      # -----------------------------
       - name: Install provisioning profile
         env:
           PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
@@ -68,21 +66,21 @@ jobs:
           UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i profile.mobileprovision)")
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
 
-      # -----------------------------
+      # ---------------------------------
       # Build archive
-      # -----------------------------
+      # ---------------------------------
       - name: Build archive
         run: |
           xcodebuild clean archive \
-            -workspace EnsWilde.xcworkspace \
+            -project EnsWilde.xcodeproj \
             -scheme EnsWilde \
             -configuration Release \
             -archivePath $PWD/build/EnsWilde.xcarchive \
             CODE_SIGN_STYLE=Manual
 
-      # -----------------------------
+      # ---------------------------------
       # Export IPA
-      # -----------------------------
+      # ---------------------------------
       - name: Export IPA
         run: |
           cat <<EOF > exportOptions.plist
@@ -104,9 +102,6 @@ jobs:
             -exportOptionsPlist exportOptions.plist \
             -exportPath $PWD/build
 
-      # -----------------------------
-      # Upload IPA artifact
-      # -----------------------------
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
