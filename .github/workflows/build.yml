@@ -1,4 +1,4 @@
-name: Build iOS IPA (Dev - CI Only)
+name: Build iOS IPA (Development - Sideload)
 
 on:
   push:
@@ -11,26 +11,29 @@ jobs:
     runs-on: macos-latest
 
     steps:
+      # -------------------------------------------------
+      # Checkout repository
+      # -------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
 
-      # ---------------------------------
-      # Force-share scheme inside CI
-      # ---------------------------------
+      # -------------------------------------------------
+      # Force-share scheme (CI only fix)
+      # -------------------------------------------------
       - name: Make scheme shared
         run: |
           mkdir -p EnsWilde.xcodeproj/xcshareddata/xcschemes
           find EnsWilde.xcodeproj -name "*.xcscheme" -exec cp {} EnsWilde.xcodeproj/xcshareddata/xcschemes/ \;
 
-      - name: List schemes (debug)
+      - name: List schemes
         run: xcodebuild -list -project EnsWilde.xcodeproj
 
-      # ---------------------------------
-      # Setup keychain
-      # ---------------------------------
+      # -------------------------------------------------
+      # Setup temporary keychain
+      # -------------------------------------------------
       - name: Setup keychain
         env:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
@@ -40,6 +43,9 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security set-keychain-settings -lut 21600 build.keychain
 
+      # -------------------------------------------------
+      # Import signing certificate
+      # -------------------------------------------------
       - name: Import certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -57,6 +63,9 @@ jobs:
             -k "$KEYCHAIN_PASSWORD" \
             build.keychain
 
+      # -------------------------------------------------
+      # Install provisioning profile
+      # -------------------------------------------------
       - name: Install provisioning profile
         env:
           PROVISIONING_PROFILE: ${{ secrets.PROVISIONING_PROFILE }}
@@ -66,9 +75,9 @@ jobs:
           UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin <<< "$(security cms -D -i profile.mobileprovision)")
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
 
-      # ---------------------------------
+      # -------------------------------------------------
       # Build archive
-      # ---------------------------------
+      # -------------------------------------------------
       - name: Build archive
         run: |
           xcodebuild clean archive \
@@ -76,11 +85,15 @@ jobs:
             -scheme EnsWilde \
             -configuration Release \
             -archivePath $PWD/build/EnsWilde.xcarchive \
-            CODE_SIGN_STYLE=Manual
+            -destination "generic/platform=iOS" \
+            DEVELOPMENT_TEAM=6392K9D8JY \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Development" \
+            PROVISIONING_PROFILE_SPECIFIER="Apple Development (Explicit)"
 
-      # ---------------------------------
+      # -------------------------------------------------
       # Export IPA
-      # ---------------------------------
+      # -------------------------------------------------
       - name: Export IPA
         run: |
           cat <<EOF > exportOptions.plist
@@ -93,6 +106,8 @@ jobs:
               <string>development</string>
               <key>signingStyle</key>
               <string>manual</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
           </dict>
           </plist>
           EOF
@@ -102,6 +117,9 @@ jobs:
             -exportOptionsPlist exportOptions.plist \
             -exportPath $PWD/build
 
+      # -------------------------------------------------
+      # Upload IPA artifact
+      # -------------------------------------------------
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
