@@ -21,7 +21,7 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode.app
 
       # -------------------------------------------------
-      # Force-share scheme (CI only fix)
+      # Force-share scheme (CI fix)
       # -------------------------------------------------
       - name: Make scheme shared
         run: |
@@ -76,7 +76,7 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.mobileprovision
 
       # -------------------------------------------------
-      # Build archive
+      # Archive (no forced manual signing)
       # -------------------------------------------------
       - name: Build archive
         run: |
@@ -87,12 +87,10 @@ jobs:
             -archivePath $PWD/build/EnsWilde.xcarchive \
             -destination "generic/platform=iOS" \
             DEVELOPMENT_TEAM=6392K9D8JY \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Development" \
-            PROVISIONING_PROFILE_SPECIFIER="Apple Development (Explicit)"
+            CODE_SIGN_IDENTITY="Apple Development"
 
       # -------------------------------------------------
-      # Export IPA
+      # Export IPA (manual signing only here)
       # -------------------------------------------------
       - name: Export IPA
         run: |
@@ -105,7 +103,7 @@ jobs:
               <key>method</key>
               <string>development</string>
               <key>signingStyle</key>
-              <string>manual</string>
+              <string>automatic</string>
               <key>stripSwiftSymbols</key>
               <true/>
           </dict>
