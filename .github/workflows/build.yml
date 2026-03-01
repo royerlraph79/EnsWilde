@@ -83,11 +83,7 @@ jobs:
             -scheme EnsWilde \
             -configuration Release \
             -archivePath $PWD/build/EnsWilde.xcarchive \
-            -destination "generic/platform=iOS" \
-            DEVELOPMENT_TEAM=${{ secrets.DEVELOPMENT_TEAM }} \
-            CODE_SIGN_IDENTITY="Apple Development" \
-            CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE_SPECIFIER=$PP_UUID
+            -destination "generic/platform=iOS"
 
       # -------------------------------------------------
       # Export IPA
@@ -104,6 +100,11 @@ jobs:
               <string>development</string>
               <key>signingStyle</key>
               <string>manual</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>com.royerlraph79</key>
+                  <string>$PP_UUID</string>
+              </dict>
               <key>stripSwiftSymbols</key>
               <true/>
           </dict>
